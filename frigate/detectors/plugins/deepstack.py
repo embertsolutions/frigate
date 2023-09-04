@@ -66,6 +66,8 @@ class DeepStack(DetectionApi):
             if detection["confidence"] < 0.4:
                 logger.debug("Break due to confidence < 0.4")
                 break
+            if i == 20:
+                break
             label = self.get_label_index(detection["label"])
             if label < 0:
                 logger.debug("Break due to unknown label")
