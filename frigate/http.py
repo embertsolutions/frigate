@@ -972,6 +972,11 @@ def config():
             "labelmap"
         ] = current_app.frigate_config.model.merged_labelmap
 
+    for facedetector, facedetector_config in config["facedetectors"].items():
+        facedetector_config["model"][
+            "facelabelmap"
+        ] = current_app.frigate_config.model.merged_facelabelmap
+
     return jsonify(config)
 
 

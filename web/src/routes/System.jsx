@@ -29,13 +29,16 @@ export default function System() {
     gpu_usages,
     bandwidth_usages,
     detectors,
+    facedetectors,
     service = {},
     detection_fps: _,
+    facedetection_fps: face_,
     processes,
     ...cameras
   } = stats || initialStats || emptyObject;
 
   const detectorNames = Object.keys(detectors || emptyObject);
+  const facedetectorNames = Object.keys(facedetectors || emptyObject);
   const gpuNames = Object.keys(gpu_usages || emptyObject);
   const cameraNames = Object.keys(cameras || emptyObject);
   const processesNames = Object.keys(processes || emptyObject);
@@ -260,6 +263,51 @@ export default function System() {
             ))}
           </div>
 
+          <div className="flex justify-start">
+            <Heading className="self-center" size="lg">
+              Face Detectors
+            </Heading>
+            <Button
+              className="rounded-full"
+              type="text"
+              color="gray"
+              aria-label="Momentary resource usage of each process that is controlling the object detector. CPU % is for a single core."
+            >
+              <About className="w-5" />
+            </Button>
+          </div>
+          <div data-testid="facedetectors" className="grid grid-cols-1 3xl:grid-cols-3 md:grid-cols-2 gap-4">
+            {facedetectorNames.map((facedetector) => (
+              <div key={facedetector} className="dark:bg-gray-800 shadow-md hover:shadow-lg rounded-lg transition-shadow">
+                <div className="text-lg flex justify-between p-4">{facedetector}</div>
+                <div className="p-2">
+                  <Table className="w-full">
+                    <Thead>
+                      <Tr>
+                        <Th>P-ID</Th>
+                        <Th>Inference Speed</Th>
+                        <Th>CPU %</Th>
+                        <Th>Memory %</Th>
+                        {config.telemetry.network_bandwidth && <Th>Network Bandwidth</Th>}
+                      </Tr>
+                    </Thead>
+                    <Tbody>
+                      <Tr>
+                        <Td>{facedetectors[facedetector]['pid']}</Td>
+                        <Td>{facedetectors[facedetector]['inference_speed']} ms</Td>
+                        <Td>{cpu_usages[facedetectors[facedetector]['pid']]?.['cpu'] || '- '}%</Td>
+                        <Td>{cpu_usages[facedetectors[facedetector]['pid']]?.['mem'] || '- '}%</Td>
+                        {config.telemetry.network_bandwidth && (
+                          <Td>{bandwidth_usages[facedetectors[facedetector]['pid']]?.['bandwidth'] || '- '}KB/s</Td>
+                        )}
+                      </Tr>
+                    </Tbody>
+                  </Table>
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div className="text-lg flex justify-between">
             <div className="flex justify-start">
               <Heading className="self-center" size="lg">
@@ -391,6 +439,27 @@ export default function System() {
                               return (
                                 <Td>
                                   {cameras[camera]['detection_fps']} ({cameras[camera]['skipped_fps']} skipped)
+                                </Td>
+                              );
+                            else if (cameras[camera]['pid'] && cameras[camera]['detection_enabled'] == 0)
+                              return <Td>disabled</Td>;
+
+                            return <Td>- </Td>;
+                          })()}
+
+                          <Td>{cpu_usages[cameras[camera]['pid']]?.['cpu'] || '- '}%</Td>
+                          <Td>{cpu_usages[cameras[camera]['pid']]?.['mem'] || '- '}%</Td>
+                          {config.telemetry.network_bandwidth && <Td>-</Td>}
+                        </Tr>
+                        <Tr key="facedetect" index="2">
+                          <Td>Face Detect</Td>
+                          <Td>{cameras[camera]['pid'] || '- '}</Td>
+
+                          {(() => {
+                            if (cameras[camera]['pid'] && cameras[camera]['detection_enabled'] == 1)
+                              return (
+                                <Td>
+                                  {cameras[camera]['facedetection_fps']}
                                 </Td>
                               );
                             else if (cameras[camera]['pid'] && cameras[camera]['detection_enabled'] == 0)

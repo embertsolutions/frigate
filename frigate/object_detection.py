@@ -1,4 +1,5 @@
 import datetime
+import time
 import logging
 import multiprocessing as mp
 import os
@@ -72,7 +73,12 @@ class LocalObjectDetector(ObjectDetector):
     def detect_raw(self, tensor_input):
         if self.input_transform:
             tensor_input = np.transpose(tensor_input, self.input_transform)
-        return self.detect_api.detect_raw(tensor_input=tensor_input)
+        start = time.monotonic_ns()
+        raw_detections = self.detect_api.detect_raw(tensor_input=tensor_input)
+        stop = time.monotonic_ns()
+        elapsed = round((stop - start) / 1000000, 0)
+        logger.info(f"Detect Time: {elapsed}ms")
+        return raw_detections
 
 
 def run_detector(
@@ -224,6 +230,7 @@ class RemoteObjectDetector:
             detections.append(
                 (self.labels[int(d[0])], float(d[1]), (d[2], d[3], d[4], d[5]))
             )
+
         self.fps.update()
         return detections
 

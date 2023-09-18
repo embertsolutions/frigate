@@ -12,6 +12,7 @@ class CameraMetricsTypes(TypedDict):
     capture_process: Optional[Process]
     detection_enabled: Synchronized
     detection_fps: Synchronized
+    facedetection_fps: Synchronized
     detection_frame: Synchronized
     ffmpeg_pid: Synchronized
     frame_queue: Queue
@@ -41,6 +42,7 @@ class FeatureMetricsTypes(TypedDict):
 class StatsTrackingTypes(TypedDict):
     camera_metrics: dict[str, CameraMetricsTypes]
     detectors: dict[str, ObjectDetectProcess]
+    facedetectors: dict[str, ObjectDetectProcess]
     started: int
     latest_frigate_version: str
     last_updated: int

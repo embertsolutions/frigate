@@ -6,6 +6,8 @@ import shutil
 import signal
 import sys
 import traceback
+import cv2
+import numpy as np
 from multiprocessing import Queue
 from multiprocessing.synchronize import Event as MpEvent
 from types import FrameType
@@ -29,6 +31,7 @@ from frigate.const import (
     EXPORT_DIR,
     MODEL_CACHE_DIR,
     RECORD_DIR,
+    FACES_DIR,
 )
 from frigate.events.audio import listen_to_audio
 from frigate.events.cleanup import EventCleanup
@@ -63,6 +66,10 @@ class FrigateApp:
         self.detectors: dict[str, ObjectDetectProcess] = {}
         self.detection_out_events: dict[str, MpEvent] = {}
         self.detection_shms: list[mp.shared_memory.SharedMemory] = []
+        self.facedetection_queue: Queue = mp.Queue()
+        self.facedetectors: dict[str, ObjectDetectProcess] = {}
+        self.facedetection_out_events: dict[str, MpEvent] = {}
+        self.facedetection_shms: list[mp.shared_memory.SharedMemory] = []
         self.log_queue: Queue = mp.Queue()
         self.plus_api = PlusApi()
         self.camera_metrics: dict[str, CameraMetricsTypes] = {}
@@ -82,12 +89,45 @@ class FrigateApp:
             CACHE_DIR,
             MODEL_CACHE_DIR,
             EXPORT_DIR,
+            FACES_DIR,
         ]:
             if not os.path.exists(d) and not os.path.islink(d):
                 logger.info(f"Creating directory: {d}")
                 os.makedirs(d)
             else:
                 logger.debug(f"Skipping directory: {d}")
+
+    def getImagesAndLabels(self, path):
+        imagePaths = [os.path.join(path,f) for f in os.listdir(path)]     
+        faceSamples=[]
+        ids = []
+
+        for imagePath in imagePaths:
+            id = int(os.path.split(imagePath)[-1].split(".")[1])
+
+            if ".jpg" in imagePath:
+                gray = np.load(imagePath.replace(".jpg", ".npy"))
+
+                faceSamples.append(gray)
+                ids.append(id)
+
+        return faceSamples,ids
+
+    def train_faces(self) -> None:
+        logger.info("Training Faces Started")
+        if self.config.model_config.face_recognition_model == "LBPH":
+            logger.info("Face Recognition LBPH")
+
+#        recognizer = cv2.face.LBPHFaceRecognizer_create()
+        recognizer = cv2.face.FisherFaceRecognizer_create()
+#        recognizer = cv2.face.EigenFaceRecognizer_create()
+        faces,ids = self.getImagesAndLabels(FACES_DIR)
+        if len(faces) > 0:
+            recognizer.train(faces, np.array(ids))
+        logger.info(f"Training {len(faces)} Faces")
+        # Save the model into /facerecognition_default.yml
+        recognizer.write("/facerecognition_default.yml")
+        logger.info("Training Faces Completed")
 
     def init_logger(self) -> None:
         self.log_process = mp.Process(
@@ -149,6 +189,7 @@ class FrigateApp:
                     self.config.cameras[camera_name].motion.contour_area,
                 ),
                 "detection_fps": mp.Value("d", 0.0),  # type: ignore[typeddict-item]
+                "facedetection_fps": mp.Value("d", 0.0),  # type: ignore[typeddict-item]
                 # issue https://github.com/python/typeshed/issues/8799
                 # from mypy 0.981 onwards
                 "detection_frame": mp.Value("d", 0.0),  # type: ignore[typeddict-item]
@@ -324,7 +365,7 @@ class FrigateApp:
 
     def init_stats(self) -> None:
         self.stats_tracking = stats_init(
-            self.config, self.camera_metrics, self.detectors, self.processes
+            self.config, self.camera_metrics, self.detectors, self.facedetectors, self.processes
         )
 
     def init_external_event_processor(self) -> None:
@@ -373,6 +414,7 @@ class FrigateApp:
     def start_detectors(self) -> None:
         for name in self.config.cameras.keys():
             self.detection_out_events[name] = mp.Event()
+            self.facedetection_out_events[name] = mp.Event()
 
             try:
                 largest_frame = max(
@@ -399,12 +441,45 @@ class FrigateApp:
             self.detection_shms.append(shm_in)
             self.detection_shms.append(shm_out)
 
+            try:
+                largest_frame = max(
+                    [
+                        det.model.height * det.model.width * 3
+                        for (name, det) in self.config.facedetectors.items()
+                    ]
+                )
+                shm_in = mp.shared_memory.SharedMemory(
+                    name=f"face{name}",
+                    create=True,
+                    size=largest_frame,
+                )
+            except FileExistsError:
+                shm_in = mp.shared_memory.SharedMemory(name=f"face{name}")
+
+            try:
+                shm_out = mp.shared_memory.SharedMemory(
+                    name=f"out-face{name}", create=True, size=20 * 6 * 4
+                )
+            except FileExistsError:
+                shm_out = mp.shared_memory.SharedMemory(name=f"out-face{name}")
+
+            self.facedetection_shms.append(shm_in)
+            self.facedetection_shms.append(shm_out)
+
         for name, detector_config in self.config.detectors.items():
             self.detectors[name] = ObjectDetectProcess(
                 name,
                 self.detection_queue,
                 self.detection_out_events,
                 detector_config,
+            )
+
+        for name, facedetector_config in self.config.facedetectors.items():
+            self.facedetectors[name] = ObjectDetectProcess(
+                name,
+                self.facedetection_queue,
+                self.facedetection_out_events,
+                facedetector_config,
             )
 
     def start_ptz_autotracker(self) -> None:
@@ -460,6 +535,9 @@ class FrigateApp:
                     self.config.model.merged_labelmap,
                     self.detection_queue,
                     self.detection_out_events[name],
+                    self.config.model.merged_facelabelmap,
+                    self.facedetection_queue,
+                    self.facedetection_out_events[name],
                     self.detected_frames_queue,
                     self.camera_metrics[name],
                     self.ptz_metrics[name],
@@ -542,7 +620,7 @@ class FrigateApp:
         self.stats_emitter.start()
 
     def start_watchdog(self) -> None:
-        self.frigate_watchdog = FrigateWatchdog(self.detectors, self.stop_event)
+        self.frigate_watchdog = FrigateWatchdog(self.detectors, self.facedetectors, self.stop_event)
         self.frigate_watchdog.start()
 
     def check_shm(self) -> None:
@@ -599,6 +677,7 @@ class FrigateApp:
             print(e)
             self.log_process.terminate()
             sys.exit(1)
+        self.train_faces()
         self.start_detectors()
         self.start_video_output_processor()
         self.start_ptz_autotracker()
@@ -638,12 +717,21 @@ class FrigateApp:
         for detector in self.detectors.values():
             detector.stop()
 
+        for facedetector in self.facedetectors.values():
+            facedetector.stop()
+
         # Empty the detection queue and set the events for all requests
         while not self.detection_queue.empty():
             connection_id = self.detection_queue.get(timeout=1)
             self.detection_out_events[connection_id].set()
         self.detection_queue.close()
         self.detection_queue.join_thread()
+
+        while not self.facedetection_queue.empty():
+            connection_id = self.facedetection_queue.get(timeout=1)
+            self.facedetection_out_events[connection_id].set()
+        self.facedetection_queue.close()
+        self.facedetection_queue.join_thread()
 
         self.dispatcher.stop()
         self.detected_frames_processor.join()
@@ -657,6 +745,11 @@ class FrigateApp:
 
         while len(self.detection_shms) > 0:
             shm = self.detection_shms.pop()
+            shm.close()
+            shm.unlink()
+
+        while len(self.facedetection_shms) > 0:
+            shm = self.facedetection_shms.pop()
             shm.close()
             shm.unlink()
 

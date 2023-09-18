@@ -47,7 +47,7 @@ DEFAULT_TIME_FORMAT = "%m/%d/%Y %H:%M:%S"
 
 FRIGATE_ENV_VARS = {k: v for k, v in os.environ.items() if k.startswith("FRIGATE_")}
 
-DEFAULT_TRACKED_OBJECTS = ["person"]
+DEFAULT_TRACKED_OBJECTS = ["person", "face"]
 DEFAULT_LISTEN_AUDIO = ["bark", "speech", "yell", "scream"]
 DEFAULT_DETECTORS = {"cpu": {"type": "cpu"}}
 DEFAULT_DETECT_DIMENSIONS = {"width": 1280, "height": 720}
@@ -978,6 +978,10 @@ class FrigateConfig(FrigateBaseModel):
         default=DEFAULT_DETECTORS,
         title="Detector hardware configuration.",
     )
+    facedetectors: Dict[str, BaseDetectorConfig] = Field(
+        default=DEFAULT_DETECTORS,
+        title="Face Detector hardware configuration.",
+    )
     logger: LoggerConfig = Field(
         default_factory=LoggerConfig, title="Logging configuration."
     )
@@ -1218,6 +1222,45 @@ class FrigateConfig(FrigateBaseModel):
             )
             detector_config.model.compute_model_hash()
             config.detectors[key] = detector_config
+
+        for key, facedetector in config.facedetectors.items():
+            facedetector_config: DetectorConfig = parse_obj_as(DetectorConfig, facedetector)
+            if facedetector_config.model is None:
+                facedetector_config.model = config.model
+            else:
+                model = facedetector_config.model
+                schema = ModelConfig.schema()["properties"]
+                if (
+                    model.width != schema["width"]["default"]
+                    or model.height != schema["height"]["default"]
+                    or model.facelabelmap_path is not None
+                    or model.facelabelmap is not {}
+                    or model.input_tensor != schema["input_tensor"]["default"]
+                    or model.input_pixel_format
+                    != schema["input_pixel_format"]["default"]
+                ):
+                    logger.warning(
+                        "Customizing more than a detector model path is unsupported."
+                    )
+            merged_model = deep_merge(
+                facedetector_config.model.dict(exclude_unset=True),
+                config.model.dict(exclude_unset=True),
+            )
+
+            if "path" not in merged_model:
+                if facedetector_config.type == "cpu":
+                    merged_model["path"] = "/face_cpu_model.tflite"
+                elif facedetector_config.type == "edgetpu":
+                    merged_model["path"] = "/face_edgetpu_model.tflite"
+                elif facedetector_config.type == "armgpu":
+                    merged_model["path"] = "/face_cpu_model.tflite"
+
+            facedetector_config.model = ModelConfig.parse_obj(merged_model)
+            facedetector_config.model.check_and_load_plus_model(
+                plus_api, facedetector_config.type
+            )
+            facedetector_config.model.compute_model_hash()
+            config.facedetectors[key] = facedetector_config
 
         return config
 

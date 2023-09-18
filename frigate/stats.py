@@ -54,11 +54,13 @@ def stats_init(
     config: FrigateConfig,
     camera_metrics: dict[str, CameraMetricsTypes],
     detectors: dict[str, ObjectDetectProcess],
+    facedetectors: dict[str, ObjectDetectProcess],
     processes: dict[str, int],
 ) -> StatsTrackingTypes:
     stats_tracking: StatsTrackingTypes = {
         "camera_metrics": camera_metrics,
         "detectors": detectors,
+        "facedetectors": facedetectors,
         "started": int(time.time()),
         "latest_frigate_version": get_latest_version(config),
         "last_updated": int(time.time()),
@@ -245,9 +247,11 @@ def stats_snapshot(
     stats: dict[str, Any] = {}
 
     total_detection_fps = 0
+    total_facedetection_fps = 0
 
     for name, camera_stats in camera_metrics.items():
         total_detection_fps += camera_stats["detection_fps"].value
+        total_facedetection_fps += camera_stats["facedetection_fps"].value
         pid = camera_stats["process"].pid if camera_stats["process"] else None
         ffmpeg_pid = (
             camera_stats["ffmpeg_pid"].value if camera_stats["ffmpeg_pid"] else None
@@ -262,6 +266,7 @@ def stats_snapshot(
             "process_fps": round(camera_stats["process_fps"].value, 2),
             "skipped_fps": round(camera_stats["skipped_fps"].value, 2),
             "detection_fps": round(camera_stats["detection_fps"].value, 2),
+            "facedetection_fps": round(camera_stats["facedetection_fps"].value, 2),
             "detection_enabled": camera_stats["detection_enabled"].value,
             "pid": pid,
             "capture_pid": cpid,
@@ -281,6 +286,21 @@ def stats_snapshot(
             "pid": pid,
         }
     stats["detection_fps"] = round(total_detection_fps, 2)
+
+    stats["facedetectors"] = {}
+    for name, facedetector in stats_tracking["facedetectors"].items():
+        pid = facedetector.detect_process.pid if facedetector.detect_process else None
+        stats["facedetectors"][name] = {
+            "inference_speed": round(facedetector.avg_inference_speed.value * 1000, 2),  # type: ignore[attr-defined]
+            # issue https://github.com/python/typeshed/issues/8799
+            # from mypy 0.981 onwards
+            "detection_start": facedetector.detection_start.value,  # type: ignore[attr-defined]
+            # issue https://github.com/python/typeshed/issues/8799
+            # from mypy 0.981 onwards
+            "pid": pid,
+        }
+    stats["facedetection_fps"] = round(total_detection_fps, 2)
+
 
     get_processing_stats(config, stats, hwaccel_errors)
 

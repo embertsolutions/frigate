@@ -37,10 +37,14 @@ class ModelTypeEnum(str, Enum):
 class ModelConfig(BaseModel):
     path: Optional[str] = Field(title="Custom Object detection model path.")
     labelmap_path: Optional[str] = Field(title="Label map for custom object detector.")
+    facelabelmap_path: Optional[str] = Field(title="Face label map for custom object detector.")
     width: int = Field(default=320, title="Object detection model input width.")
     height: int = Field(default=320, title="Object detection model input height.")
     labelmap: Dict[int, str] = Field(
         default_factory=dict, title="Labelmap customization."
+    )
+    facelabelmap: Dict[int, str] = Field(
+        default_factory=dict, title="FaceLabelmap customization."
     )
     input_tensor: InputTensorEnum = Field(
         default=InputTensorEnum.nhwc, title="Model Input Tensor Shape"
@@ -51,13 +55,25 @@ class ModelConfig(BaseModel):
     model_type: ModelTypeEnum = Field(
         default=ModelTypeEnum.ssd, title="Object Detection Model Type"
     )
+    face_recognition_model: Optional[str] = Field(title="Face Recognition Model.")
+    face_recognition_min_score: Optional[float] = Field(
+        default=0.5, title="Face Recognition Minimum detection confidence for object to be counted."
+    )
+    face_training_camera: Optional[str] = Field(title="Face Training Camera.")
+    face_training_label_id: Optional[str] = Field(title="Face Training Label ID.")
+
     _merged_labelmap: Optional[Dict[int, str]] = PrivateAttr()
+    _merged_facelabelmap: Optional[Dict[int, str]] = PrivateAttr()
     _colormap: Dict[int, Tuple[int, int, int]] = PrivateAttr()
     _model_hash: str = PrivateAttr()
 
     @property
     def merged_labelmap(self) -> Dict[int, str]:
         return self._merged_labelmap
+
+    @property
+    def merged_facelabelmap(self) -> Dict[int, str]:
+        return self._merged_facelabelmap
 
     @property
     def colormap(self) -> Dict[int, Tuple[int, int, int]]:
@@ -73,6 +89,10 @@ class ModelConfig(BaseModel):
         self._merged_labelmap = {
             **load_labels(config.get("labelmap_path", "/labelmap.txt")),
             **config.get("labelmap", {}),
+        }
+        self._merged_facelabelmap = {
+            **load_labels(config.get("facelabelmap_path", "/facelabelmap.txt")),
+            **config.get("facelabelmap", {}),
         }
         self._colormap = {}
 
@@ -113,6 +133,10 @@ class ModelConfig(BaseModel):
         self._merged_labelmap = {
             **{int(key): val for key, val in model_info["labelMap"].items()},
             **self.labelmap,
+        }
+        self._merged_facelabelmap = {
+            **{int(key): val for key, val in model_info["facelabelMap"].items()},
+            **self.facelabelmap,
         }
 
     def compute_model_hash(self) -> None:

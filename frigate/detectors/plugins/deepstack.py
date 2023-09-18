@@ -32,11 +32,20 @@ class DeepStack(DetectionApi):
         self.api_timeout = detector_config.api_timeout
         self.api_key = detector_config.api_key
         self.labels = detector_config.model.merged_labelmap
+        self.facelabels = detector_config.model.merged_facelabelmap
 
     def get_label_index(self, label_value):
         if label_value.lower() == "truck":
             label_value = "car"
         for index, value in self.labels.items():
+            if value == label_value.lower():
+                return index
+        return -1
+
+    def get_facelabel_index(self, label_value):
+        if label_value.lower() == "truck":
+            label_value = "car"
+        for index, value in self.facelabels.items():
             if value == label_value.lower():
                 return index
         return -1
@@ -68,7 +77,20 @@ class DeepStack(DetectionApi):
                 break
             if i == 20:
                 break
-            label = self.get_label_index(detection["label"])
+            jsonlabel = detection.get("label");
+            if jsonlabel:
+                label = self.get_label_index(detection["label"])
+            else:
+                if "/face/recognize" in self.api_url:
+                    label = self.get_label_index(detection["userid"])
+                    logger.info("/face/recognize api")
+                else:
+                    if "/face" in self.api_url:
+                        label = self.get_facelabel_index("face")
+                        logger.info("/face/ api")
+                    else:
+                        label = self.get_facelabel_index("face")
+                        logger.info("hardcoded 3")
             if label < 0:
                 logger.debug("Break due to unknown label")
                 break

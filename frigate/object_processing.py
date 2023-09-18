@@ -261,6 +261,7 @@ class TrackedObject:
             "snapshot": self.thumbnail_data,
             "label": self.obj_data["label"],
             "sub_label": self.obj_data.get("sub_label"),
+            "sub_label_score": self.obj_data.get("sub_label_score"),
             "top_score": self.top_score,
             "false_positive": self.false_positive,
             "start_time": self.obj_data["start_time"],
@@ -514,9 +515,16 @@ class CameraState:
                     obj["label"]
                     if (
                         not obj.get("sub_label")
-                        or not is_label_printable(obj["sub_label"][0])
+                        or not is_label_printable(obj["sub_label"])
                     )
-                    else obj["sub_label"][0]
+                    else obj["sub_label"]
+                )
+                score = (
+                    obj["score"]
+                    if (
+                        not obj.get("sub_label_score")
+                    )
+                    else obj["sub_label_score"]
                 )
                 draw_box_with_label(
                     frame_copy,
@@ -525,7 +533,7 @@ class CameraState:
                     box[2],
                     box[3],
                     text,
-                    f"{obj['score']:.0%} {int(obj['area'])}",
+                    f"{score:.0%} {int(obj['area'])}",
                     thickness=thickness,
                     color=color,
                 )

@@ -15,7 +15,7 @@ import numpy as np
 from setproctitle import setproctitle
 
 from frigate.config import CameraConfig, DetectConfig, ModelConfig
-from frigate.const import ALL_ATTRIBUTE_LABELS, ATTRIBUTE_LABEL_MAP, CACHE_DIR
+from frigate.const import ALL_ATTRIBUTE_LABELS, ATTRIBUTE_LABEL_MAP, CACHE_DIR, FACES_DIR
 from frigate.detectors.detector_config import PixelFormatEnum
 from frigate.log import LogPipe
 from frigate.motion import MotionDetector
@@ -460,6 +460,9 @@ def track_camera(
     labelmap,
     detection_queue,
     result_connection,
+    facelabelmap,
+    facedetection_queue,
+    faceresult_connection,
     detected_objects_queue,
     process_info,
     ptz_metrics,
@@ -499,6 +502,15 @@ def track_camera(
         name, labelmap, detection_queue, result_connection, model_config, stop_event
     )
 
+    face_detector = RemoteObjectDetector(
+        name, facelabelmap, facedetection_queue, faceresult_connection, model_config, stop_event
+    )
+
+#    face_recognizer = cv2.face.LBPHFaceRecognizer_create()
+    recognizer = cv2.face.FisherFaceRecognizer_create()
+#    recognizer = cv2.face.EigenFaceRecognizer_create()
+    face_recognizer.read('/facerecognition_default.yml')
+
     object_tracker = NorfairTracker(config, ptz_metrics)
 
     frame_manager = SharedMemoryFrameManager()
@@ -512,6 +524,8 @@ def track_camera(
         frame_manager,
         motion_detector,
         object_detector,
+        face_detector,
+        face_recognizer,
         object_tracker,
         detected_objects_queue,
         process_info,
@@ -737,6 +751,8 @@ def process_frames(
     frame_manager: FrameManager,
     motion_detector: MotionDetector,
     object_detector: RemoteObjectDetector,
+    face_detector: RemoteObjectDetector,
+    face_recognizer,
     object_tracker: ObjectTracker,
     detected_objects_queue: mp.Queue,
     process_info: dict,
@@ -750,6 +766,7 @@ def process_frames(
 ):
     fps = process_info["process_fps"]
     detection_fps = process_info["detection_fps"]
+    facedetection_fps = process_info["facedetection_fps"]
     current_frame_time = process_info["detection_frame"]
 
     fps_tracker = EventsPerSecond()
@@ -877,8 +894,7 @@ def process_frames(
             ]
 
             for region in regions:
-                detections.extend(
-                    detect(
+                raw_detections = detect(
                         detect_config,
                         object_detector,
                         frame,
@@ -887,7 +903,7 @@ def process_frames(
                         objects_to_track,
                         object_filters,
                     )
-                )
+                detections.extend( raw_detections )
 
             #########
             # merge objects
@@ -938,6 +954,36 @@ def process_frames(
                     for d in consolidated_detections
                     if d[0] not in ALL_ATTRIBUTE_LABELS
                 ]
+
+                if "face" in objects_to_track:
+                    for tracked_detection in tracked_detections:
+                        if tracked_detection[0] == "person":
+                            logger.info("Person Detected")
+                            region = calculate_region(
+                                    frame_shape,
+                                    tracked_detection[2][0],
+                                    tracked_detection[2][1],
+                                    tracked_detection[2][2],
+                                    tracked_detection[2][3],
+                                    region_min_size,
+                                    multiplier=1.1,
+                            )
+
+                            raw_face_detections = detect(
+                                    detect_config,
+                                    face_detector,
+                                    frame,
+                                    model_config,
+                                    region,
+                                    objects_to_track,
+                                    object_filters,
+                                )
+
+                            for raw_face_detection in raw_face_detections:
+                                if raw_face_detection[0] == "face":
+                                    logger.info("Face Detected")
+                                    consolidated_detections.append(raw_face_detection)
+
                 # now that we have refined our detections, we need to track objects
                 object_tracker.match_and_update(frame_time, tracked_detections)
             # else, just update the frame times for the stationary objects
@@ -950,6 +996,8 @@ def process_frames(
             attribute_detections[label] = [
                 d for d in consolidated_detections if d[0] in attribute_labels
             ]
+
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_YUV2GRAY_I420)
 
         # build detections and add attributes
         detections = {}
@@ -964,9 +1012,52 @@ def process_frames(
                             {
                                 "label": attribute_detection[0],
                                 "score": attribute_detection[1],
-                                "box": attribute_detection[2],
+                                "box": attribute_detection[2],                               
                             }
                         )
+
+                        region = calculate_region(
+                                 frame_shape,
+                                 attribute_detection[2][0],
+                                 attribute_detection[2][1],
+                                 attribute_detection[2][2],
+                                 attribute_detection[2][3],
+                                 region_min_size,
+                                 multiplier=1.1,
+                        )
+                        
+                        start = time.monotonic_ns()
+                        try:
+                           id, confidence = face_recognizer.predict(gray_frame[region[1]:region[3],region[0]:region[2]])
+                        except:
+                           id, confidence = -1, 1000
+                        stop = time.monotonic_ns()
+                        elapsed = round((stop - start) / 1000000, 0)
+                        logger.info(f"Face Recognition Time: {elapsed}ms")
+
+                        # Check if confidence is less them 100 ==> "0" is perfect match 
+                        if (id > 0 and confidence < 100):
+                            name = "" 
+                            for index, value in model_config.facelabelmap.items():
+                                if index == id:
+                                    name = value
+                                    break
+
+                            confidence = round(100 - confidence) / 100.0
+
+                            if confidence >= model_config.face_recognition_min_score:
+                               obj["sub_label"] = name
+                               obj["sub_label_score"] = confidence
+                               logger.info(f"Face Recognized {name} {confidence}")
+
+                        if model_config.face_training_camera is not None:
+                            if camera_name in model_config.face_training_camera:
+                                now = round(time.time(), 3)
+                                # Save the captured image into the datasets folder
+                                cv2.imwrite(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now) + ".jpg", gray_frame[region[1]:region[3],region[0]:region[2]])
+                                # Save raw np data, to save reconstructing in training
+                                np.save(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now), gray_frame[region[1]:region[3],region[0]:region[2]]);
+
             detections[obj["id"]] = {**obj, "attributes": attributes}
 
         # debug object tracking
