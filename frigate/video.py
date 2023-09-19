@@ -31,12 +31,14 @@ from frigate.util.image import (
     SharedMemoryFrameManager,
     area,
     calculate_region,
+    calculate_face_region,
     draw_box_with_label,
     intersection,
     intersection_over_union,
     yuv_region_2_bgr,
     yuv_region_2_rgb,
     yuv_region_2_yuv,
+    yuv_crop_and_resize_face,
 )
 from frigate.util.services import listen
 
@@ -506,9 +508,12 @@ def track_camera(
         name, facelabelmap, facedetection_queue, faceresult_connection, model_config, stop_event
     )
 
-#    face_recognizer = cv2.face.LBPHFaceRecognizer_create()
-    recognizer = cv2.face.FisherFaceRecognizer_create()
-#    recognizer = cv2.face.EigenFaceRecognizer_create()
+    if model_config.face_recognition_model == "LBPH":
+        face_recognizer = cv2.face.LBPHFaceRecognizer_create()
+    if model_config.face_recognition_model == "Fisher":
+        face_recognizer = cv2.face.FisherFaceRecognizer_create()
+    if model_config.face_recognition_model == "Eigen":
+        face_recognizer = cv2.face.EigenFaceRecognizer_create()
     face_recognizer.read('/facerecognition_default.yml')
 
     object_tracker = NorfairTracker(config, ptz_metrics)
@@ -958,7 +963,7 @@ def process_frames(
                 if "face" in objects_to_track:
                     for tracked_detection in tracked_detections:
                         if tracked_detection[0] == "person":
-                            logger.info("Person Detected")
+#                            logger.info("Person Detected")
                             region = calculate_region(
                                     frame_shape,
                                     tracked_detection[2][0],
@@ -981,7 +986,7 @@ def process_frames(
 
                             for raw_face_detection in raw_face_detections:
                                 if raw_face_detection[0] == "face":
-                                    logger.info("Face Detected")
+#                                    logger.info("Face Detected")
                                     consolidated_detections.append(raw_face_detection)
 
                 # now that we have refined our detections, we need to track objects
@@ -996,8 +1001,6 @@ def process_frames(
             attribute_detections[label] = [
                 d for d in consolidated_detections if d[0] in attribute_labels
             ]
-
-        gray_frame = cv2.cvtColor(frame, cv2.COLOR_YUV2GRAY_I420)
 
         # build detections and add attributes
         detections = {}
@@ -1016,47 +1019,61 @@ def process_frames(
                             }
                         )
 
-                        region = calculate_region(
-                                 frame_shape,
-                                 attribute_detection[2][0],
-                                 attribute_detection[2][1],
-                                 attribute_detection[2][2],
-                                 attribute_detection[2][3],
-                                 region_min_size,
-                                 multiplier=1.1,
+                        face_region = calculate_face_region(
+                                attribute_detection[2][0],
+                                attribute_detection[2][1],
+                                attribute_detection[2][2],
+                                attribute_detection[2][3],
                         )
+
+                        cropped = yuv_crop_and_resize_face(frame, face_region)
+
+                        gray_frame = cv2.cvtColor(cropped, cv2.COLOR_YUV2GRAY_I420)
+
+                        # [rows,columns] [ymin:ymax,xmin:xmax]
+                        gray_face = cv2.resize(gray_frame,
+                                               dsize=(360, 360),
+                                               interpolation=cv2.INTER_CUBIC,
+                                              )
+                        gray_face = cv2.equalizeHist(gray_face)
                         
                         start = time.monotonic_ns()
                         try:
-                           id, confidence = face_recognizer.predict(gray_frame[region[1]:region[3],region[0]:region[2]])
+                           id, confidence = face_recognizer.predict(gray_face)
                         except:
-                           id, confidence = -1, 1000
+                           id, confidence = -1, 10000
                         stop = time.monotonic_ns()
                         elapsed = round((stop - start) / 1000000, 0)
                         logger.info(f"Face Recognition Time: {elapsed}ms")
-
+                        logger.info(f"Face id:{id} confidence:{round(confidence, 2)}")
                         # Check if confidence is less them 100 ==> "0" is perfect match 
-                        if (id > 0 and confidence < 100):
+                        if (id > 0 and confidence <= 10000):
                             name = "" 
                             for index, value in model_config.facelabelmap.items():
                                 if index == id:
                                     name = value
                                     break
 
-                            confidence = round(100 - confidence) / 100.0
+                            if model_config.face_recognition_model == "LBPH":
+                                confidence = round(100 - confidence) / 100.0
+                            if model_config.face_recognition_model == "Fisher":
+                                confidence = round(500 - confidence) / 100.0
+                            if model_config.face_recognition_model == "Eigen":
+                                confidence = round(5000 - confidence) / 100.0
+
+                            logger.info(f"Face Recognized {name} {confidence}")
 
                             if confidence >= model_config.face_recognition_min_score:
                                obj["sub_label"] = name
                                obj["sub_label_score"] = confidence
-                               logger.info(f"Face Recognized {name} {confidence}")
 
                         if model_config.face_training_camera is not None:
                             if camera_name in model_config.face_training_camera:
                                 now = round(time.time(), 3)
                                 # Save the captured image into the datasets folder
-                                cv2.imwrite(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now) + ".jpg", gray_frame[region[1]:region[3],region[0]:region[2]])
+                                cv2.imwrite(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now) + ".jpg", gray_face)
                                 # Save raw np data, to save reconstructing in training
-                                np.save(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now), gray_frame[region[1]:region[3],region[0]:region[2]]);
+                                np.save(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now), gray_face);
 
             detections[obj["id"]] = {**obj, "attributes": attributes}
 

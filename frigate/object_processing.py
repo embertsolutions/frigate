@@ -222,6 +222,13 @@ class TrackedObject:
                 max_logo = max(recognized_logos, key=recognized_logos.get)
                 self.obj_data["sub_label"] = (max_logo, recognized_logos[max_logo])
 
+        if self.obj_data.get("sub_label"):
+            if obj_data.get("sub_label"):
+                if self.obj_data["sub_label_score"] > obj_data["sub_label_score"]:
+                    obj_data["sub_label"] = self.obj_data["sub_label"]
+                    obj_data["sub_label_score"] = self.obj_data["sub_label_score"]
+#                    logger.info("Preventing Score Regression")
+
         # check for significant change
         if not self.false_positive:
             # if the zones changed, signal an update

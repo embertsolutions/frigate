@@ -185,6 +185,35 @@ def calculate_region(frame_shape, xmin, ymin, xmax, ymax, model_size, multiplier
 
     return (x_offset, y_offset, x_offset + size, y_offset + size)
 
+def calculate_face_region(xmin, ymin, xmax, ymax):
+    width = xmax - xmin
+    height = ymax - ymin
+
+    crop_width = 0.60
+    crop_height = 0.70
+
+    # Zoom in on the face features
+    xmin = xmin + int(width *  (1 - crop_width) / 2)
+    ymin = ymin + int(height * (1 - crop_height) / 2)
+    width = int(width * crop_width)
+    height = int(height * crop_height)
+
+    # Has to be divisibe by 2, reduce if necessary
+    x_min = xmin
+    width = width - (width % 2)
+    x_max = x_min + width
+    # Has to be divisable by 4, reduce if necessary
+    if (height % 4) > 1:
+        y_min = ymin + 1
+    else:
+        y_min = ymin
+    height = height - (height % 4)
+    y_max = y_min + height
+
+#    logger.info(f"calculate_face_region {width} {height}")
+#    logger.info(f"calculate_face_region {x_min} {y_min} {x_max} {y_max}")
+
+    return (x_min, y_min, x_max, y_max)
 
 def get_yuv_crop(frame_shape, crop):
     # crop should be (x1,y1,x2,y2)
@@ -317,6 +346,102 @@ def yuv_crop_and_resize(frame, region, height=None):
         + uv_channel_x_offset
         + uv_crop_width,
     ] = frame[v2[1] : v2[3], v2[0] : v2[2]]
+
+    return yuv_cropped_frame
+
+def yuv_crop_and_resize_face(frame, region, height=None):
+    height = frame.shape[0] // 3 * 2
+    width = frame.shape[1]
+
+    # get the crop box if the region extends beyond the frame
+    crop_x1 = max(0, region[0])
+    crop_y1 = max(0, region[1])
+    # ensure these are a multiple of 4
+    crop_x2 = min(width, region[2])
+    crop_y2 = min(height, region[3])
+
+    face_width = crop_x2 - crop_x1
+    face_height = crop_y2 - crop_y1
+
+    # Has to be divisibe by 2, reduce if necessary
+    face_width = face_width - (face_width % 2)
+    crop_x2 = crop_x1 + face_width
+    # Has to be divisable by 4, reduce if necessary
+    if (face_height % 4) > 1:
+        crop_y1 = crop_y1 + 1
+    face_height = face_height - (face_height % 4)
+    crop_y2 = crop_y1 + face_height
+
+#    logger.info(f"yuv_crop_and_resize_face {face_width} {face_height}")
+#    logger.info(f"yuv_crop_and_resize_face {crop_x1} {crop_y1} {crop_x2} {crop_y2}")
+
+    crop_box = (crop_x1, crop_y1, crop_x2, crop_y2)
+
+    y, u1, u2, v1, v2 = get_yuv_crop(frame.shape, crop_box)
+
+    # if the region starts outside the frame, indent the start point in the cropped frame
+    y_channel_x_offset = abs(min(0, region[0]))
+    y_channel_y_offset = abs(min(0, region[1]))
+
+    uv_channel_x_offset = y_channel_x_offset // 2
+    uv_channel_y_offset = y_channel_y_offset // 4
+
+    # create the yuv region frame
+    yuv_cropped_frame = np.zeros((face_height + face_height // 2, face_width), np.uint8)
+    # fill in black
+    yuv_cropped_frame[:] = 128
+    yuv_cropped_frame[0:face_height, 0:face_width] = 16
+
+    # copy the y channel
+    yuv_cropped_frame[
+        y_channel_y_offset : y_channel_y_offset + y[3] - y[1],
+        y_channel_x_offset : y_channel_x_offset + y[2] - y[0],
+    ] = frame[y[1] : y[3], y[0] : y[2]]
+
+    uv_crop_width = u1[2] - u1[0]
+    uv_crop_height = u1[3] - u1[1]
+
+    # copy u1
+    yuv_cropped_frame[
+        face_height + uv_channel_y_offset : face_height + uv_channel_y_offset + uv_crop_height,
+        0 + uv_channel_x_offset : 0 + uv_channel_x_offset + uv_crop_width,
+    ] = frame[u1[1] : u1[3], u1[0] : u1[2]]
+
+    # copy u2
+    yuv_cropped_frame[
+        face_height + uv_channel_y_offset : face_height + uv_channel_y_offset + uv_crop_height,
+        face_width // 2
+        + uv_channel_x_offset : face_width // 2
+        + uv_channel_x_offset
+        + uv_crop_width,
+    ] = frame[u2[1] : u2[3], u2[0] : u2[2]]
+
+    # copy v1
+    yuv_cropped_frame[
+        face_height
+        + face_height // 4
+        + uv_channel_y_offset : face_height
+        + face_height // 4
+        + uv_channel_y_offset
+        + uv_crop_height,
+        0 + uv_channel_x_offset : 0 + uv_channel_x_offset + uv_crop_width,
+    ] = frame[v1[1] : v1[3], v1[0] : v1[2]]
+
+    # copy v2
+    yuv_cropped_frame[
+        face_height
+        + face_height // 4
+        + uv_channel_y_offset : face_height
+        + face_height // 4
+        + uv_channel_y_offset
+        + uv_crop_height,
+        face_width // 2
+        + uv_channel_x_offset : face_width // 2
+        + uv_channel_x_offset
+        + uv_crop_width,
+    ] = frame[v2[1] : v2[3], v2[0] : v2[2]]
+
+#    logger.info(f"yuv_crop_and_resize_face {frame.shape[0]} {frame.shape[1]}")
 
     return yuv_cropped_frame
 

@@ -55,7 +55,8 @@ class ModelConfig(BaseModel):
     model_type: ModelTypeEnum = Field(
         default=ModelTypeEnum.ssd, title="Object Detection Model Type"
     )
-    face_recognition_model: Optional[str] = Field(title="Face Recognition Model.")
+    face_recognition_model: Optional[str] = Field(
+        default="LBPH", title="Face Recognition Model.")
     face_recognition_min_score: Optional[float] = Field(
         default=0.5, title="Face Recognition Minimum detection confidence for object to be counted."
     )

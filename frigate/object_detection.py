@@ -77,7 +77,7 @@ class LocalObjectDetector(ObjectDetector):
         raw_detections = self.detect_api.detect_raw(tensor_input=tensor_input)
         stop = time.monotonic_ns()
         elapsed = round((stop - start) / 1000000, 0)
-        logger.info(f"Detect Time: {elapsed}ms")
+#        logger.info(f"Detect Time: {elapsed}ms")
         return raw_detections
 
 

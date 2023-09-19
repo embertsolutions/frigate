@@ -107,7 +107,6 @@ class FrigateApp:
 
             if ".jpg" in imagePath:
                 gray = np.load(imagePath.replace(".jpg", ".npy"))
-
                 faceSamples.append(gray)
                 ids.append(id)
 
@@ -115,13 +114,19 @@ class FrigateApp:
 
     def train_faces(self) -> None:
         logger.info("Training Faces Started")
-        if self.config.model_config.face_recognition_model == "LBPH":
-            logger.info("Face Recognition LBPH")
-
-#        recognizer = cv2.face.LBPHFaceRecognizer_create()
-        recognizer = cv2.face.FisherFaceRecognizer_create()
-#        recognizer = cv2.face.EigenFaceRecognizer_create()
         faces,ids = self.getImagesAndLabels(FACES_DIR)
+        # Fisher and Eigen needs at least 2 ids
+        if len(np.unique(ids)) < 2:
+            self.config.model.face_recognition_model = "LBPH"
+        if self.config.model.face_recognition_model == "LBPH":
+            logger.info("Face Recognition LBPH")
+            recognizer = cv2.face.LBPHFaceRecognizer_create()
+        if self.config.model.face_recognition_model == "Fisher":
+            logger.info("Face Recognition Fisher")
+            recognizer = cv2.face.FisherFaceRecognizer_create()
+        if self.config.model.face_recognition_model == "Eigen":
+            logger.info("Face Recognition Eigen")
+            recognizer = cv2.face.EigenFaceRecognizer_create()
         if len(faces) > 0:
             recognizer.train(faces, np.array(ids))
         logger.info(f"Training {len(faces)} Faces")
