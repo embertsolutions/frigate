@@ -1019,61 +1019,62 @@ def process_frames(
                             }
                         )
 
-                        face_region = calculate_face_region(
-                                attribute_detection[2][0],
-                                attribute_detection[2][1],
-                                attribute_detection[2][2],
-                                attribute_detection[2][3],
-                        )
+                        if (obj["area"] >= model_config.face_recognition_min_area) and (obj["area"] <= model_config.face_recognition_max_area):
+                            face_region = calculate_face_region(
+                                    attribute_detection[2][0],
+                                    attribute_detection[2][1],
+                                    attribute_detection[2][2],
+                                    attribute_detection[2][3],
+                            )
 
-                        cropped = yuv_crop_and_resize_face(frame, face_region)
+                            cropped = yuv_crop_and_resize_face(frame, face_region)
 
-                        gray_frame = cv2.cvtColor(cropped, cv2.COLOR_YUV2GRAY_I420)
+                            gray_frame = cv2.cvtColor(cropped, cv2.COLOR_YUV2GRAY_I420)
 
-                        # [rows,columns] [ymin:ymax,xmin:xmax]
-                        gray_face = cv2.resize(gray_frame,
-                                               dsize=(360, 360),
-                                               interpolation=cv2.INTER_CUBIC,
-                                              )
-                        gray_face = cv2.equalizeHist(gray_face)
+                            # [rows,columns] [ymin:ymax,xmin:xmax]
+                            gray_face = cv2.resize(gray_frame,
+                                                   dsize=(360, 360),
+                                                   interpolation=cv2.INTER_CUBIC,
+                                                  )
+                            gray_face = cv2.equalizeHist(gray_face)
                         
-                        start = time.monotonic_ns()
-                        try:
-                           id, confidence = face_recognizer.predict(gray_face)
-                        except:
-                           id, confidence = -1, 10000
-                        stop = time.monotonic_ns()
-                        elapsed = round((stop - start) / 1000000, 0)
-                        logger.info(f"Face Recognition Time: {elapsed}ms")
-                        logger.info(f"Face id:{id} confidence:{round(confidence, 2)}")
-                        # Check if confidence is less them 100 ==> "0" is perfect match 
-                        if (id > 0 and confidence <= 10000):
-                            name = "" 
-                            for index, value in model_config.facelabelmap.items():
-                                if index == id:
-                                    name = value
-                                    break
+                            start = time.monotonic_ns()
+                            try:
+                               id, confidence = face_recognizer.predict(gray_face)
+                            except:
+                               id, confidence = -1, 10000
+                            stop = time.monotonic_ns()
+                            elapsed = round((stop - start) / 1000000, 0)
+                            logger.info(f"Face Recognition Time: {elapsed}ms")
+                            logger.info(f"Face id:{id} confidence:{round(confidence, 2)}")
+                            # Check if confidence is less them 100 ==> "0" is perfect match 
+                            if (id > 0 and confidence <= 10000):
+                                name = "" 
+                                for index, value in model_config.facelabelmap.items():
+                                    if index == id:
+                                        name = value
+                                        break
 
-                            if model_config.face_recognition_model == "LBPH":
-                                confidence = round(100 - confidence) / 100.0
-                            if model_config.face_recognition_model == "Fisher":
-                                confidence = round(500 - confidence) / 100.0
-                            if model_config.face_recognition_model == "Eigen":
-                                confidence = round(5000 - confidence) / 100.0
+                                if model_config.face_recognition_model == "LBPH":
+                                    confidence = round(100 - confidence) / 100.0
+                                if model_config.face_recognition_model == "Fisher":
+                                    confidence = round(500 - confidence) / 100.0
+                                if model_config.face_recognition_model == "Eigen":
+                                    confidence = round(5000 - confidence) / 100.0
 
-                            logger.info(f"Face Recognized {name} {confidence}")
+                                logger.info(f"Face Recognized {name} {confidence}")
 
-                            if confidence >= model_config.face_recognition_min_score:
-                               obj["sub_label"] = name
-                               obj["sub_label_score"] = confidence
-
-                        if model_config.face_training_camera is not None:
-                            if camera_name in model_config.face_training_camera:
-                                now = round(time.time(), 3)
-                                # Save the captured image into the datasets folder
-                                cv2.imwrite(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now) + ".jpg", gray_face)
-                                # Save raw np data, to save reconstructing in training
-                                np.save(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now), gray_face);
+                                if confidence >= model_config.face_recognition_min_score:
+                                    obj["sub_label"] = name
+                                    obj["sub_label_score"] = confidence
+ 
+                            if model_config.face_training_camera is not None:
+                                if camera_name in model_config.face_training_camera:
+                                    now = round(time.time(), 3)
+                                    # Save the captured image into the datasets folder
+                                    cv2.imwrite(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now) + ".jpg", gray_face)
+                                    # Save raw np data, to save reconstructing in training
+                                    np.save(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now), gray_face);
 
             detections[obj["id"]] = {**obj, "attributes": attributes}
 

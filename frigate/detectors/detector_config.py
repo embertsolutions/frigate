@@ -57,6 +57,12 @@ class ModelConfig(BaseModel):
     )
     face_recognition_model: Optional[str] = Field(
         default="LBPH", title="Face Recognition Model.")
+    face_recognition_min_area: int = Field(
+        default=0, title="Face Recognition Minimum area of bounding box for object to be counted."
+    )
+    face_recognition_max_area: int = Field(
+        default=24000000, title="Face Recognition Maximum area of bounding box for object to be counted."
+    )
     face_recognition_min_score: Optional[float] = Field(
         default=0.5, title="Face Recognition Minimum detection confidence for object to be counted."
     )
