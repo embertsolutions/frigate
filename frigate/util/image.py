@@ -185,12 +185,38 @@ def calculate_region(frame_shape, xmin, ymin, xmax, ymax, model_size, multiplier
 
     return (x_offset, y_offset, x_offset + size, y_offset + size)
 
+def calculate_gray_face_region(width, height, crop_width, crop_height):
+    # Zoom in on the face features
+    xmin = int(width *  (1 - crop_width) / 2)
+    ymin = int(height * (1 - crop_height) / 2)
+    width = int(width * crop_width)
+    height = int(height * crop_height)
+
+    # Has to be divisibe by 2, reduce if necessary
+    x_min = xmin
+    width = width - (width % 2)
+    x_max = x_min + width
+    # Has to be divisable by 4, reduce if necessary
+    if (height % 4) > 1:
+        y_min = ymin + 1
+    else:
+        y_min = ymin
+    height = height - (height % 4)
+    y_max = y_min + height
+
+#    logger.info(f"calculate_gray_face_region {width} {height}")
+#    logger.info(f"calculate_gray_face_region {x_min} {y_min} {x_max} {y_max}")
+
+    return (x_min, y_min, x_max, y_max)
+
+
+
 def calculate_face_region(xmin, ymin, xmax, ymax):
     width = xmax - xmin
     height = ymax - ymin
 
-    crop_width = 0.60
-    crop_height = 0.70
+    crop_width = 1.00
+    crop_height = 1.00
 
     # Zoom in on the face features
     xmin = xmin + int(width *  (1 - crop_width) / 2)
@@ -293,6 +319,9 @@ def yuv_crop_and_resize(frame, region, height=None):
     # make sure the size is a multiple of 4
     # TODO: this should be based on the size after resize now
     size = (region[3] - region[1]) // 4 * 4
+    size2 = (region[2] - region[0]) // 4 * 4
+    if size2 > size:
+        size = size2
     yuv_cropped_frame = np.zeros((size + size // 2, size), np.uint8)
     # fill in black
     yuv_cropped_frame[:] = 128

@@ -37,9 +37,11 @@ from frigate.events.audio import listen_to_audio
 from frigate.events.cleanup import EventCleanup
 from frigate.events.external import ExternalEventProcessor
 from frigate.events.maintainer import EventProcessor
+from frigate.face import FaceProcessor
 from frigate.http import create_app
+from frigate.util.image import calculate_gray_face_region
 from frigate.log import log_process, root_configurer
-from frigate.models import Event, Recordings, RecordingsToDelete, Timeline
+from frigate.models import Event, Face, FaceLabel, Recordings, RecordingsToDelete, Timeline
 from frigate.object_detection import ObjectDetectProcess
 from frigate.object_processing import TrackedObjectProcessor
 from frigate.output import output_frames
@@ -97,24 +99,39 @@ class FrigateApp:
             else:
                 logger.debug(f"Skipping directory: {d}")
 
-    def getImagesAndLabels(self, path):
-        imagePaths = [os.path.join(path,f) for f in os.listdir(path)]     
+    def getImagesAndLabels(self):
         faceSamples=[]
         ids = []
 
-        for imagePath in imagePaths:
-            id = int(os.path.split(imagePath)[-1].split(".")[1])
+        selected_columns = [
+            Face.id,
+            Face.label_id,
+        ]
 
-            if ".jpg" in imagePath:
-                gray = np.load(imagePath.replace(".jpg", ".npy"))
-                faceSamples.append(gray)
-                ids.append(id)
+        faces = (
+            Face.select(*selected_columns)
+        )
+
+        for f in faces:
+            if (f.label_id != None) and (f.label_id >= 0):
+                image = np.load(FACES_DIR + "/" + f.id + ".npy")
+                gray_frame = cv2.cvtColor(image, cv2.COLOR_YUV2GRAY_I420)
+                height, width = gray_frame.shape
+                x_min, y_min, x_max, y_max = calculate_gray_face_region(width, height, self.config.model.face_recognition_width_crop, self.config.model.face_recognition_height_crop)
+                # [rows,columns] [ymin:ymax,xmin:xmax]
+                gray_face = cv2.resize(gray_frame[y_min:y_max,x_min:x_max],
+                                        dsize=(360, 360),
+                                        interpolation=cv2.INTER_CUBIC,
+                                        )
+                gray_face = cv2.equalizeHist(gray_face)
+                faceSamples.append(gray_face)
+                ids.append(f.label_id)
 
         return faceSamples,ids
 
     def train_faces(self) -> None:
         logger.info("Training Faces Started")
-        faces,ids = self.getImagesAndLabels(FACES_DIR)
+        faces,ids = self.getImagesAndLabels()
         # Fisher and Eigen needs at least 2 ids
         if len(np.unique(ids)) < 2:
             self.config.model.face_recognition_model = "LBPH"
@@ -279,6 +296,9 @@ class FrigateApp:
         # Queue for timeline events
         self.timeline_queue: Queue = mp.Queue()
 
+        # Queue for face events
+        self.face_queue: Queue = mp.Queue()
+
         # Queue for inter process communication
         self.inter_process_queue: Queue = mp.Queue()
 
@@ -365,8 +385,46 @@ class FrigateApp:
                 60, 10 * len([c for c in self.config.cameras.values() if c.enabled])
             ),
         )
-        models = [Event, Recordings, RecordingsToDelete, Timeline]
+        models = [Event, Face, FaceLabel, Recordings, RecordingsToDelete, Timeline]
         self.db.bind(models)
+
+    def add_database_defaults(self) -> None:
+        logger.info("add_database_defaults")
+        selected_columns = [
+            FaceLabel.id,
+        ]
+
+        facelabels = (
+            FaceLabel.select(*selected_columns)
+            .order_by(FaceLabel.id.asc())
+        )
+
+        foundNotSet = False
+        foundUnknown = False
+
+        for f in facelabels:
+            if f.id == -1:
+                foundNotSet = True
+            if f.id == 0:
+                foundUnknown = True
+
+        if foundNotSet == False:
+            logger.info("add_database_defaults: Adding Not Set FaceLabel")
+            facelabel_entry = {
+                FaceLabel.id: -1,
+                FaceLabel.label: "Not Set",
+            }
+
+            FaceLabel.insert(facelabel_entry).execute()
+
+        if foundUnknown == False:
+            logger.info("add_database_defaults: Adding Unknown FaceLabel")
+            facelabel_entry = {
+                FaceLabel.id: 0,
+                FaceLabel.label: "Unknown",
+            }
+
+            FaceLabel.insert(facelabel_entry).execute()
 
     def init_stats(self) -> None:
         self.stats_tracking = stats_init(
@@ -393,6 +451,10 @@ class FrigateApp:
             self.onvif_controller,
             self.external_event_processor,
             self.plus_api,
+            self.face_queue,
+            self.facedetection_queue,
+            self.facedetection_out_events["Import"],
+            self.stop_event
         )
 
     def init_onvif(self) -> None:
@@ -471,6 +533,59 @@ class FrigateApp:
             self.facedetection_shms.append(shm_in)
             self.facedetection_shms.append(shm_out)
 
+        self.detection_out_events["Import"] = mp.Event()
+        self.facedetection_out_events["Import"] = mp.Event()
+
+        try:
+            largest_frame = max(
+                [
+                    det.model.height * det.model.width * 3
+                    for (name, det) in self.config.detectors.items()
+                ]
+            )
+            shm_in = mp.shared_memory.SharedMemory(
+                name="Import",
+                create=True,
+                size=largest_frame,
+            )
+        except FileExistsError:
+            shm_in = mp.shared_memory.SharedMemory(name="Import")
+
+        try:
+            shm_out = mp.shared_memory.SharedMemory(
+                name="out-Import", create=True, size=20 * 6 * 4
+            )
+        except FileExistsError:
+            shm_out = mp.shared_memory.SharedMemory(name="out-Import")
+
+        self.detection_shms.append(shm_in)
+        self.detection_shms.append(shm_out)
+
+        try:
+            largest_frame = max(
+                [
+                    det.model.height * det.model.width * 3
+                    for (name, det) in self.config.facedetectors.items()
+                ]
+            )
+            shm_in = mp.shared_memory.SharedMemory(
+                name="faceImport",
+                create=True,
+                size=largest_frame,
+            )
+        except FileExistsError:
+            shm_in = mp.shared_memory.SharedMemory(name="faceImport")
+
+        try:
+            shm_out = mp.shared_memory.SharedMemory(
+                name="out-faceImport", create=True, size=20 * 6 * 4
+            )
+        except FileExistsError:
+            shm_out = mp.shared_memory.SharedMemory(name="out-faceImport")
+
+        self.facedetection_shms.append(shm_in)
+        self.facedetection_shms.append(shm_out)
+
         for name, detector_config in self.config.detectors.items():
             self.detectors[name] = ObjectDetectProcess(
                 name,
@@ -546,6 +661,7 @@ class FrigateApp:
                     self.detected_frames_queue,
                     self.camera_metrics[name],
                     self.ptz_metrics[name],
+                    self.face_queue,
                 ),
             )
             camera_process.daemon = True
@@ -591,6 +707,12 @@ class FrigateApp:
             self.config, self.timeline_queue, self.stop_event
         )
         self.timeline_processor.start()
+
+    def start_face_processor(self) -> None:
+        self.face_processor = FaceProcessor(
+            self.config, self.face_queue, self.stop_event
+        )
+        self.face_processor.start()
 
     def start_event_processor(self) -> None:
         self.event_processor = EventProcessor(
@@ -676,6 +798,7 @@ class FrigateApp:
             self.init_recording_manager()
             self.init_go2rtc()
             self.bind_database()
+            self.add_database_defaults()
             self.init_inter_process_communicator()
             self.init_dispatcher()
         except Exception as e:
@@ -695,6 +818,7 @@ class FrigateApp:
         self.init_external_event_processor()
         self.init_web_server()
         self.start_timeline_processor()
+        self.start_face_processor()
         self.start_event_processor()
         self.start_event_cleanup()
         self.start_record_cleanup()

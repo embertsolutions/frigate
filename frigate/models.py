@@ -47,6 +47,15 @@ class Event(Model):  # type: ignore[misc]
     model_type = CharField(max_length=32)
     data = JSONField()  # ex: tracked object box, region, etc.
 
+class Face(Model):  # type: ignore[misc]
+    id = CharField(null=False, primary_key=True, max_length=30)
+    label_id = IntegerField(null=False)
+    capture_time = DateTimeField()
+    data = JSONField()  # ex: for expansion, etc.
+
+class FaceLabel(Model):  # type: ignore[misc]
+    id = IntegerField(null=True, primary_key=True)
+    label = CharField(null=False, max_length=100)
 
 class Timeline(Model):  # type: ignore[misc]
     timestamp = DateTimeField()

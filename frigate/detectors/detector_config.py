@@ -57,6 +57,12 @@ class ModelConfig(BaseModel):
     )
     face_recognition_model: Optional[str] = Field(
         default="LBPH", title="Face Recognition Model.")
+    face_recognition_width_crop: Optional[float] = Field(
+        default=0.70, title="Face Recognition percentage crop from Detection."
+    )
+    face_recognition_height_crop: Optional[float] = Field(
+        default=0.70, title="Face Recognition percentage crop from Detection."
+    )
     face_recognition_min_area: int = Field(
         default=0, title="Face Recognition Minimum area of bounding box for object to be counted."
     )
@@ -66,8 +72,7 @@ class ModelConfig(BaseModel):
     face_recognition_min_score: Optional[float] = Field(
         default=0.5, title="Face Recognition Minimum detection confidence for object to be counted."
     )
-    face_training_camera: Optional[str] = Field(title="Face Training Camera.")
-    face_training_label_id: Optional[str] = Field(title="Face Training Label ID.")
+    face_training_camera: Optional[str] = Field(default="Any", title="Face Training Camera.")
 
     _merged_labelmap: Optional[Dict[int, str]] = PrivateAttr()
     _merged_facelabelmap: Optional[Dict[int, str]] = PrivateAttr()

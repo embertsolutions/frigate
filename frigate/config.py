@@ -535,7 +535,6 @@ class CameraRoleEnum(str, Enum):
     rtmp = "rtmp"
     detect = "detect"
 
-
 class CameraInput(FrigateBaseModel):
     path: str = Field(title="Camera input path.")
     roles: List[CameraRoleEnum] = Field(title="Roles assigned to this input.")

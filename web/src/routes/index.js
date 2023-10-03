@@ -28,6 +28,16 @@ export async function getExports(_url, _cb, _props) {
   return module.default;
 }
 
+export async function getFaces(_url, _cb, _props) {
+  const module = await import('./Faces.jsx');
+  return module.default;
+}
+
+export async function getFaceLabels(_url, _cb, _props) {
+  const module = await import('./FaceLabels.jsx');
+  return module.default;
+}
+
 export async function getRecording(_url, _cb, _props) {
   const module = await import('./Recording.jsx');
   return module.default;

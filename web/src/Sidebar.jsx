@@ -46,6 +46,9 @@ export default function Sidebar() {
       <Destination href="/events" text="Events" />
       <Destination href="/exports" text="Exports" />
       <Separator />
+      <Destination href="/faces" text="Faces" />
+      <Destination href="/facelabels" text="Face Labels" />
+      <Separator />
       <Destination href="/storage" text="Storage" />
       <Destination href="/system" text="System" />
       <Destination href="/config" text="Config" />

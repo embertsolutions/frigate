@@ -4,7 +4,9 @@ import math
 import multiprocessing as mp
 import os
 import queue
+import random
 import signal
+import string
 import subprocess as sp
 import threading
 import time
@@ -14,10 +16,11 @@ import cv2
 import numpy as np
 from setproctitle import setproctitle
 
-from frigate.config import CameraConfig, DetectConfig, ModelConfig
+from frigate.config import CameraConfig, DetectConfig, ModelConfig, FrigateConfig
 from frigate.const import ALL_ATTRIBUTE_LABELS, ATTRIBUTE_LABEL_MAP, CACHE_DIR, FACES_DIR
 from frigate.detectors.detector_config import PixelFormatEnum
 from frigate.log import LogPipe
+from frigate.models import Face, FaceLabel
 from frigate.motion import MotionDetector
 from frigate.motion.improved_motion import ImprovedMotionDetector
 from frigate.object_detection import RemoteObjectDetector
@@ -39,6 +42,7 @@ from frigate.util.image import (
     yuv_region_2_rgb,
     yuv_region_2_yuv,
     yuv_crop_and_resize_face,
+    calculate_gray_face_region,
 )
 from frigate.util.services import listen
 
@@ -468,6 +472,7 @@ def track_camera(
     detected_objects_queue,
     process_info,
     ptz_metrics,
+    face_queue,
 ):
     stop_event = mp.Event()
 
@@ -540,6 +545,7 @@ def track_camera(
         motion_enabled,
         stop_event,
         ptz_metrics,
+        face_queue,
     )
 
     logger.info(f"{name}: exiting subprocess")
@@ -624,6 +630,54 @@ def detect(
         # apply object filters
         if filtered(det, objects_to_track, object_filters):
             continue
+        detections.append(det)
+    return detections
+
+def import_face_detect(
+    config: FrigateConfig,
+    frame,
+    facedetection_queue,
+    faceresult_connection,
+    stop_event,
+    height,
+    width,
+):
+    object_detector = RemoteObjectDetector(
+        "Import", config.model.merged_facelabelmap, facedetection_queue, faceresult_connection, config.model, stop_event
+    )
+
+    region = calculate_face_region(0, 0, width - 1, height - 1)
+
+    logger.error(f"region{region}")
+
+    tensor_input = create_tensor_input(frame, config.model, region)
+
+    detections = []
+    region_detections = object_detector.detect(tensor_input)
+    for d in region_detections:
+        box = d[2]
+        logger.error(f"box{box}")
+        size = region[3] - region[1]
+        size2 = (region[2] - region[0])
+        if size2 > size:
+            size = size2
+        x_min = int(max(0, (box[1] * size) + region[0]))
+        y_min = int(max(0, (box[0] * size) + region[1]))
+        x_max = int(min(width - 1, (box[3] * size) + region[0]))
+        y_max = int(min(height - 1, (box[2] * size) + region[1]))
+
+        dwidth = x_max - x_min
+        dheight = y_max - y_min
+        area = dwidth * dheight
+        ratio = dwidth / max(1, dheight)
+        det = (
+            d[0],
+            d[1],
+            (x_min, y_min, x_max, y_max),
+            area,
+            ratio,
+            region,
+        )
         detections.append(det)
     return detections
 
@@ -767,6 +821,7 @@ def process_frames(
     motion_enabled: mp.Value,
     stop_event,
     ptz_metrics: PTZMetricsTypes,
+    face_queue: mp.Queue,
     exit_on_empty: bool = False,
 ):
     fps = process_info["process_fps"]
@@ -1031,8 +1086,14 @@ def process_frames(
 
                             gray_frame = cv2.cvtColor(cropped, cv2.COLOR_YUV2GRAY_I420)
 
+                            height, width = gray_frame.shape
+
+                            # logger.info(f"Gray Frame: {height}:{width}")
+
+                            x_min, y_min, x_max, y_max = calculate_gray_face_region(width, height, model_config.face_recognition_width_crop, model_config.face_recognition_height_crop)
+
                             # [rows,columns] [ymin:ymax,xmin:xmax]
-                            gray_face = cv2.resize(gray_frame,
+                            gray_face = cv2.resize(gray_frame[y_min:y_max,x_min:x_max],
                                                    dsize=(360, 360),
                                                    interpolation=cv2.INTER_CUBIC,
                                                   )
@@ -1048,33 +1109,53 @@ def process_frames(
                             logger.info(f"Face Recognition Time: {elapsed}ms")
                             logger.info(f"Face id:{id} confidence:{round(confidence, 2)}")
                             # Check if confidence is less them 100 ==> "0" is perfect match 
-                            if (id > 0 and confidence <= 10000):
+                            if (id >= 0 and confidence <= 10000):
                                 name = "" 
-                                for index, value in model_config.facelabelmap.items():
-                                    if index == id:
-                                        name = value
-                                        break
+                                found = True
 
-                                if model_config.face_recognition_model == "LBPH":
-                                    confidence = round(100 - confidence) / 100.0
-                                if model_config.face_recognition_model == "Fisher":
-                                    confidence = round(500 - confidence) / 100.0
-                                if model_config.face_recognition_model == "Eigen":
-                                    confidence = round(5000 - confidence) / 100.0
+                                try:
+                                    facelabel: FaceLabel = FaceLabel.get(FaceLabel.id == id)
+                                except DoesNotExist:
+                                    found = False
+                                
+                                if (found):
+                                    name = facelabel.label
 
-                                logger.info(f"Face Recognized {name} {confidence}")
+                                    if model_config.face_recognition_model == "LBPH":
+                                        confidence = round(100 - confidence) / 100.0
+                                    if model_config.face_recognition_model == "Fisher":
+                                        confidence = round(500 - confidence) / 100.0
+                                    if model_config.face_recognition_model == "Eigen":
+                                        confidence = round(5000 - confidence) / 100.0
 
-                                if confidence >= model_config.face_recognition_min_score:
-                                    obj["sub_label"] = name
-                                    obj["sub_label_score"] = confidence
- 
-                            if model_config.face_training_camera is not None:
-                                if camera_name in model_config.face_training_camera:
-                                    now = round(time.time(), 3)
-                                    # Save the captured image into the datasets folder
-                                    cv2.imwrite(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now) + ".jpg", gray_face)
-                                    # Save raw np data, to save reconstructing in training
-                                    np.save(FACES_DIR + "/User." + model_config.face_training_label_id + '.' + str(now), gray_face);
+                                    logger.info(f"Face Recognized {name} {confidence}")
+
+                                    if id > 0 and confidence >= model_config.face_recognition_min_score:
+                                        obj["sub_label"] = name
+                                        obj["sub_label_score"] = confidence
+
+                            if os.path.exists(FACES_DIR + "/captureenabled"):
+                                if ("Any" in model_config.face_training_camera) or (camera_name in model_config.face_training_camera):
+                                    now = datetime.datetime.now().timestamp()
+                                    rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                                    face_id = f"{now}-{rand_id}"
+
+                                    face = {
+                                        Face.id: face_id,
+                                        Face.capture_time: now,
+                                        Face.data: {},
+                                    }
+
+                                    face_queue.put(
+                                        (
+                                            "face",
+                                            face_id,
+                                            -1,
+                                            now,
+                                        )
+                                    )
+
+                                    np.save(FACES_DIR + "/" + face_id, cropped);
 
             detections[obj["id"]] = {**obj, "attributes": attributes}
 

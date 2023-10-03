@@ -3,12 +3,9 @@ import { useRef, useState } from 'preact/hooks';
 import Menu from './Menu';
 import { ArrowDropdown } from '../icons/ArrowDropdown';
 import Heading from './Heading';
-import Button from './Button';
-import CameraIcon from '../icons/Camera';
-import SpeakerIcon from '../icons/Speaker';
 import useSWR from 'swr';
 
-export default function MultiSelect({ className, title, options, selection, onToggle, onShowAll, onSelectSingle }) {
+export default function SingleSelect({ className, title, options, selection, onToggle }) {
   const popupRef = useRef(null);
 
   const [state, setState] = useState({
@@ -16,7 +13,11 @@ export default function MultiSelect({ className, title, options, selection, onTo
   });
 
   const isOptionSelected = (item) => {
-    return selection == 'all' || selection.split(',').indexOf(item) > -1;
+    if (selection) {
+      return selection.split(',').indexOf(item) > -1;
+    } else {
+      return false;
+    }
   };
 
   const menuHeight = Math.round(window.innerHeight * 0.55);
@@ -37,9 +38,6 @@ export default function MultiSelect({ className, title, options, selection, onTo
             <Heading className="p-4 justify-center" size="md">
               {title}
             </Heading>
-            <Button tabindex="false" className="mx-4" onClick={() => onShowAll()}>
-              Show All
-            </Button>
           </div>
           {options.map((item) => (
             <div className="flex flex-grow" key={item}>
@@ -54,19 +52,6 @@ export default function MultiSelect({ className, title, options, selection, onTo
                 />
                 {item.replaceAll('_', ' ')}
               </label>
-              { onSelectSingle ? (
-                <div className="justify-right">
-                  <Button
-                    color={isOptionSelected(item) ? 'blue' : 'black'}
-                    type="text"
-                    className="max-h-[35px] mx-2"
-                    onClick={() => onSelectSingle(item)}
-                  >
-                    { (title === "Labels" && config.audio.listen.includes(item)) ? ( <SpeakerIcon /> ) : ( <CameraIcon /> ) }
-                    
-                  </Button>
-                </div>
-              ) : null}
             </div>
           ))}
         </Menu>

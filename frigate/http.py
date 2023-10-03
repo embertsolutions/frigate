@@ -3,7 +3,10 @@ import copy
 import glob
 import json
 import logging
+import multiprocessing as mp
 import os
+import random
+import string
 import subprocess as sp
 import time
 import traceback
@@ -32,13 +35,14 @@ from tzlocal import get_localzone_name
 from frigate.config import FrigateConfig
 from frigate.const import (
     CACHE_DIR,
+    FACES_DIR,
     CLIPS_DIR,
     CONFIG_DIR,
     MAX_SEGMENT_DURATION,
     RECORD_DIR,
 )
 from frigate.events.external import ExternalEventProcessor
-from frigate.models import Event, Recordings, Timeline
+from frigate.models import Event, Face, FaceLabel, Recordings, Timeline
 from frigate.object_processing import TrackedObject
 from frigate.plus import PlusApi
 from frigate.ptz.onvif import OnvifController
@@ -52,6 +56,12 @@ from frigate.util.builtin import (
 )
 from frigate.util.services import ffprobe_stream, restart_frigate, vainfo_hwaccel
 from frigate.version import VERSION
+from frigate.util.image import (
+    calculate_face_region,
+    calculate_gray_face_region,
+    yuv_crop_and_resize_face,
+)
+from frigate.video import import_face_detect
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +77,10 @@ def create_app(
     onvif: OnvifController,
     external_processor: ExternalEventProcessor,
     plus_api: PlusApi,
+    face_queue: mp.Queue,
+    facedetection_queue,
+    faceresult_connection,
+    stop_event,
 ):
     app = Flask(__name__)
 
@@ -87,6 +101,10 @@ def create_app(
     app.onvif = onvif
     app.external_processor = external_processor
     app.plus_api = plus_api
+    app.face_queue = face_queue
+    app.facedetection_queue = facedetection_queue
+    app.faceresult_connection = faceresult_connection
+    app.stop_event = stop_event
     app.camera_error_image = None
     app.hwaccel_errors = []
 
@@ -432,6 +450,62 @@ def set_sub_label(id):
         200,
     )
 
+### FACES
+
+
+
+
+@bp.route("/faces/<id>", methods=("GET",))
+def face(id):
+    logger.info("/faces/<id>")
+    try:
+        return model_to_dict(Face.get(Face.id == id))
+    except DoesNotExist:
+        return "Face not found", 404
+
+
+
+
+@bp.route("/faces/<id>/label", methods=("PUT",))
+def faces_set_label(id):
+    logger.info("/faces/<id>/label")
+    try:
+        face: Face = Face.get(Face.id == id)
+    except DoesNotExist:
+        return make_response(
+            jsonify({"success": False, "message": "Face " + id + " not found"}), 404
+        )
+
+    json: dict[str, any] = request.get_json(silent=True) or {}
+    labelid = json.get("labelid")
+
+    if labelid and labelid > 20:
+        return make_response(
+            jsonify(
+                {
+                    "success": False,
+                    "message": labelid
+                    + " exceeds the 20 limit for labelid",
+                }
+            ),
+            400,
+        )
+
+    face.label_id = labelid
+
+    face.save()
+    return make_response(
+        jsonify(
+            {
+                "success": True,
+                "message": "Face " + id + " labelid set to " + str(labelid),
+            }
+        ),
+        200,
+    )
+
+
+### END FACES
 
 @bp.route("/labels")
 def get_labels():
@@ -449,6 +523,228 @@ def get_labels():
 
     labels = sorted([e.label for e in events])
     return jsonify(labels)
+
+@bp.route("/facelabels")
+def get_facelabels():
+    selected_columns = [
+        FaceLabel.id,
+        FaceLabel.label,
+    ]
+
+    facelabels = (
+        FaceLabel.select(*selected_columns)
+        .order_by(FaceLabel.id.asc())
+    )
+
+    return jsonify([model_to_dict(f) for f in facelabels])
+
+@bp.route("/facelabels/<id>/delete", methods=("DELETE",))
+def delete_facelabel(id):
+    json: dict[str, any] = request.get_json(silent=True) or {}
+
+    logger.error(f"Delete {id}")
+
+    try:
+        facelabel: FaceLabel = FaceLabel.get(FaceLabel.id == int(id))
+    except DoesNotExist:
+        return make_response(
+            jsonify({"success": False, "message": "FaceLabel " + id + " not found"}), 404
+        )
+
+    if int(id) == -1:
+        return make_response(
+            jsonify({"success": False, "message": "FaceLabel " + id + " cannot be deleted"}), 400
+        )
+
+    if int(id) == 0:
+        return make_response(
+            jsonify({"success": False, "message": "FaceLabel " + id + " cannot be deleted"}), 400
+        )
+
+    facelabel.delete_instance()
+
+    selected_columns = [
+        Face.id,
+        Face.label_id,
+        Face.capture_time,
+        Face.data,
+    ]
+
+    faces = (
+        Face.select(*selected_columns)
+    )
+
+    for f in faces:
+        if f.label_id == int(id):
+            f.label_id = -1
+            f.save()
+
+    return make_response(
+        jsonify({"success": True, "message": "FaceLabel " + id + " deleted"}), 200
+    )
+
+
+
+@bp.route("/facelabels/add", methods=("POST",))
+def add_facelabel():
+    json: dict[str, any] = request.get_json(silent=True) or {}
+    label = json.get("label")
+
+    logger.error(f"Add {label}")
+
+    if label and len(label) > 100:
+        return make_response(
+            jsonify(
+                {
+                    "success": False,
+                    "message": label
+                    + " exceeds the 100 character limit for label",
+                }
+            ),
+            400,
+        )
+
+    if label == None or len(label) == 0:
+        return make_response(
+            jsonify(
+                {
+                    "success": False,
+                    "message": label
+                    + " label must have at least 1 character",
+                }
+            ),
+            400,
+        )
+
+    selected_columns = [
+        FaceLabel.id,
+        FaceLabel.label,
+    ]
+
+    facelabels = (
+        FaceLabel.select(*selected_columns)
+        .order_by(FaceLabel.id.asc())
+    )
+
+    found = False
+
+    for f in facelabels:
+        if f.label == label:
+            found = True
+            break
+
+    if found:
+        return make_response(
+            jsonify({"success": True, "message": "FaceLabel " + label + " duplicates not allowed"}), 400
+        )
+
+    id = 0
+
+    for x in range(1, 20):
+        found = False
+        for f in facelabels:
+            if f.id == x:
+                found = True
+                break
+        if found == False:
+            id = x
+            break
+
+    if id == 0:
+        return make_response(
+            jsonify(
+                {
+                    "success": False,
+                    "message": "no free label ids",
+                }
+            ),
+            400,
+        )
+
+    facelabel_entry = {
+        FaceLabel.id: id,
+        FaceLabel.label: label,
+    }
+
+    FaceLabel.insert(facelabel_entry).execute()
+
+    return make_response(
+        jsonify(
+            {
+                "success": True,
+                "message": "FaceLabel " + str(id) + " set to " + label,
+            }
+        ),
+        200,
+    )
+
+
+@bp.route("/facelabels/<id>/change", methods=("PUT",))
+def change_facelabel(id):
+    json: dict[str, any] = request.get_json(silent=True) or {}
+    label = json.get("label")
+
+    logger.error(f"Change {id} {label}")
+
+    try:
+        facelabel: FaceLabel = FaceLabel.get(FaceLabel.id == int(id))
+    except DoesNotExist:
+        return make_response(
+            jsonify({"success": False, "message": "FaceLabel " + id + " not found"}), 404
+        )
+
+    if label and len(label) > 100:
+        return make_response(
+            jsonify(
+                {
+                    "success": False,
+                    "message": label
+                    + " exceeds the 100 character limit for label",
+                }
+            ),
+            400,
+        )
+
+    if label == None or len(label) == 0:
+        return make_response(
+            jsonify(
+                {
+                    "success": False,
+                    "message": label
+                    + " label must have at least 1 character",
+                }
+            ),
+            400,
+        )
+
+    selected_columns = [
+        FaceLabel.id,
+        FaceLabel.label,
+    ]
+
+    facelabels = (
+        FaceLabel.select(*selected_columns)
+        .order_by(FaceLabel.id.asc())
+    )
+
+    found = False
+
+    for f in facelabels:
+        if f.label == label:
+            found = True
+            break
+
+    if found:
+        return make_response(
+            jsonify({"success": True, "message": "FaceLabel " + label + " duplicates not allowed"}), 400
+        )
+
+    facelabel.label = label
+    facelabel.save()
+    return make_response(
+        jsonify({"success": True, "message": "FaceLabel " + id + " changed to " + label}), 200
+    )
+
 
 
 @bp.route("/sub_labels")
@@ -559,6 +855,151 @@ def event_thumbnail(id, max_cache_age=2592000):
     return response
 
 
+
+@bp.route("/faces/<id>", methods=("DELETE",))
+def delete_face(id):
+    try:
+        face = Face.get(Face.id == id)
+    except DoesNotExist:
+        return make_response(
+            jsonify({"success": False, "message": "Face " + id + " not found"}), 404
+        )
+
+    media_name = f"{face.id}"
+    media = Path(f"{os.path.join(FACES_DIR, media_name)}.npy")
+    media.unlink(missing_ok=True)
+
+    face.delete_instance()
+    return make_response(
+        jsonify({"success": True, "message": "Face " + id + " deleted"}), 200
+    )
+
+
+@bp.route("/faces/<id>/thumbnail.jpg")
+def face_thumbnail(id, max_cache_age=2592000):
+    format = request.args.get("format", "ios")
+    thumbnail_bytes = None
+    try:
+        face = Face.get(Face.id == id)
+    except DoesNotExist:
+        return "Face not found", 404
+
+    image = np.load(FACES_DIR + "/" + face.id + ".npy")
+
+    if image is None:
+        return "Event not found", 404
+
+    try:
+        best_frame = cv2.cvtColor(
+            image,
+            cv2.COLOR_YUV2BGR_I420,
+        )
+    except KeyError:
+        return "Event not found", 404
+
+
+    best_frame = cv2.resize(
+        best_frame, dsize=(175, 175), interpolation=cv2.INTER_AREA
+    )
+
+    ret, jpg = cv2.imencode(
+        ".jpg", best_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+    )
+    
+    thumbnail_bytes = jpg.tobytes()
+
+    if thumbnail_bytes is None:
+        return "Event not found", 404
+
+    # android notifications prefer a 2:1 ratio
+    if format == "android":
+        jpg_as_np = np.frombuffer(thumbnail_bytes, dtype=np.uint8)
+        img = cv2.imdecode(jpg_as_np, flags=1)
+        thumbnail = cv2.copyMakeBorder(
+            img,
+            0,
+            0,
+            int(img.shape[1] * 0.5),
+            int(img.shape[1] * 0.5),
+            cv2.BORDER_CONSTANT,
+            (0, 0, 0),
+        )
+        ret, jpg = cv2.imencode(".jpg", thumbnail, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        thumbnail_bytes = jpg.tobytes()
+
+    response = make_response(thumbnail_bytes)
+    response.headers["Content-Type"] = "image/jpeg"
+    response.headers["Cache-Control"] = f"private, max-age={max_cache_age}"
+    return response
+
+
+@bp.route("/faces/<id>/dectector_thumbnail.jpg")
+def face_dectector_thumbnail(id):
+    format = request.args.get("format", "ios")
+    thumbnail_bytes = None
+    try:
+        face = Face.get(Face.id == id)
+    except DoesNotExist:
+        return "Face not found", 404
+
+    image = np.load(FACES_DIR + "/" + face.id + ".npy")
+
+    if image is None:
+        return "Event not found", 404
+
+    try:
+        best_frame = cv2.cvtColor(
+            image,
+            cv2.COLOR_YUV2GRAY_I420,
+        )
+    except KeyError:
+        return "Event not found", 404
+
+    height, width = best_frame.shape
+
+    logger.error(f"Gray Crop{current_app.frigate_config.model.face_recognition_width_crop}")
+    logger.error(f"Gray Crop{current_app.frigate_config.model.face_recognition_height_crop}")
+
+    x_min, y_min, x_max, y_max = calculate_gray_face_region(width, height, current_app.frigate_config.model.face_recognition_width_crop, current_app.frigate_config.model.face_recognition_height_crop)
+
+    best_frame = cv2.resize(
+        best_frame[y_min:y_max,x_min:x_max], dsize=(175, 175), interpolation=cv2.INTER_CUBIC
+    )
+
+    best_frame = cv2.equalizeHist(best_frame)
+
+    ret, jpg = cv2.imencode(
+        ".jpg", best_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+    )
+    
+    thumbnail_bytes = jpg.tobytes()
+
+    if thumbnail_bytes is None:
+        return "Event not found", 404
+
+    # android notifications prefer a 2:1 ratio
+    if format == "android":
+        jpg_as_np = np.frombuffer(thumbnail_bytes, dtype=np.uint8)
+        img = cv2.imdecode(jpg_as_np, flags=1)
+        thumbnail = cv2.copyMakeBorder(
+            img,
+            0,
+            0,
+            int(img.shape[1] * 0.5),
+            int(img.shape[1] * 0.5),
+            cv2.BORDER_CONSTANT,
+            (0, 0, 0),
+        )
+        ret, jpg = cv2.imencode(".jpg", thumbnail, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        thumbnail_bytes = jpg.tobytes()
+
+    response = make_response(thumbnail_bytes)
+    response.headers["Content-Type"] = "image/jpeg"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+
 @bp.route("/timeline")
 def timeline():
     camera = request.args.get("camera", "all")
@@ -666,6 +1107,7 @@ def event_snapshot(id):
             "Content-Disposition"
         ] = f"attachment; filename=snapshot-{id}.jpg"
     return response
+
 
 
 @bp.route("/<camera_name>/<label>/snapshot.jpg")
@@ -947,6 +1389,179 @@ def end_event(event_id):
     return make_response(
         jsonify({"success": True, "message": "Event successfully ended."}), 200
     )
+
+
+
+
+@bp.route("/faces")
+def faces():
+    label_ids = request.args.get("label_ids", "all")
+
+    limit = request.args.get("limit", 100)
+    after = request.args.get("after", type=float)
+    before = request.args.get("before", type=float)
+
+    clauses = []
+    excluded_fields = []
+
+    selected_columns = [
+        Face.id,
+        Face.label_id,
+        Face.capture_time,
+        Face.data,
+    ]
+
+    if label_ids != "all":
+        label_list = label_ids.split(",")
+        clauses.append((Face.label_id << label_list))
+
+    if after:
+        clauses.append((Face.capture_time > after))
+
+    if before:
+        clauses.append((Face.capture_time < before))
+
+    if len(clauses) == 0:
+        clauses.append((True))
+
+    faces = (
+        Face.select(*selected_columns)
+        .where(reduce(operator.and_, clauses))
+        .order_by(Face.capture_time.desc())
+        .limit(limit)
+    )
+
+    return jsonify([model_to_dict(f, exclude=excluded_fields) for f in faces])
+
+@bp.route("/faces/startcapture", methods=["POST"])
+def faces_startcapture():
+
+    logger.error("Start Capture")
+
+    if not os.path.exists(FACES_DIR + "/captureenabled"):
+        with open(FACES_DIR + "/captureenabled", 'w') as f:
+            f.write('captureenabled')
+            f.close()
+
+    return make_response(
+        jsonify(
+            {
+                "success": True,
+                "message": "Successfully forced retrain.",
+            }
+        ),
+        200,
+    )
+
+@bp.route("/faces/stopcapture", methods=["POST"])
+def faces_stopcapture():
+
+    logger.error("Stop Capture")
+
+    if os.path.exists(FACES_DIR + "/captureenabled"):
+        os.remove(FACES_DIR + "/captureenabled")    
+
+    return make_response(
+        jsonify(
+            {
+                "success": True,
+                "message": "Successfully forced retrain.",
+            }
+        ),
+        200,
+    )
+
+@bp.route("/faces/<id>/import", methods=["POST"])
+def faces_import(id):
+
+    logger.error("Import")
+
+    file = request.files['myFile']
+
+    if not file:
+        return "Image is required", 400
+
+    file.save(FACES_DIR + "/" + file.filename)
+
+    image = cv2.imread(FACES_DIR + "/" + file.filename, cv2.IMREAD_COLOR)
+
+    os.remove(FACES_DIR + "/" + file.filename)
+
+    height, width, depth = image.shape
+
+    logger.error(f"image.shape{image.shape}")
+
+    frame = cv2.cvtColor(image, cv2.COLOR_BGR2YUV_I420)
+
+    logger.error(f"frame.shape{frame.shape}")
+
+    raw_face_detections = import_face_detect(current_app.frigate_config, frame, current_app.facedetection_queue, current_app.faceresult_connection, current_app.stop_event, height, width)
+
+    for raw_face_detection in raw_face_detections:
+        face_region = calculate_face_region(
+                raw_face_detection[2][0],
+                raw_face_detection[2][1],
+                raw_face_detection[2][2],
+                raw_face_detection[2][3],
+        )
+
+        cropped = yuv_crop_and_resize_face(frame, face_region)
+
+        now = datetime.now().timestamp()
+        rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        face_id = f"{now}-{rand_id}"
+
+        face = {
+            Face.id: face_id,
+            Face.capture_time: now,
+            Face.data: {},
+        }
+
+        current_app.face_queue.put(
+            (
+                "face",
+                face_id,
+                int(id),
+                now,
+            )
+        )
+
+        np.save(FACES_DIR + "/" + face_id, cropped);
+
+
+    return make_response(
+        jsonify(
+            {
+                "success": True,
+                "message": "Successfully forced retrain.",
+            }
+        ),
+        200,
+    )
+
+
+@bp.route("/faces/forceretrain", methods=["POST"])
+def faces_forceretrain():
+
+    try:
+        restart_frigate()
+    except Exception as e:
+        logging.error(f"Error restarting Frigate: {e}")
+        return make_response(
+            jsonify({"success": True, "message": "Unable to force retrain."}), 400
+        )
+
+    return make_response(
+        jsonify(
+            {
+                "success": True,
+                "message": "Successfully forced retrain.",
+            }
+        ),
+        200,
+    )
+
+
 
 
 @bp.route("/config")
