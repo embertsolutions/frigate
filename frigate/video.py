@@ -1107,7 +1107,7 @@ def process_frames(
                             stop = time.monotonic_ns()
                             elapsed = round((stop - start) / 1000000, 0)
                             logger.info(f"Face Recognition Time: {elapsed}ms")
-                            logger.info(f"Face id:{id} confidence:{round(confidence, 2)}")
+                            logger.info(f"Face id:{id} rawconfidence:{round(confidence, 2)} camera:{camera_name}")
                             # Check if confidence is less them 100 ==> "0" is perfect match 
                             if (id >= 0 and confidence <= 10000):
                                 name = "" 
@@ -1120,42 +1120,47 @@ def process_frames(
                                 
                                 if (found):
                                     name = facelabel.label
+                                    confidence = round(((model_config.face_recognition_max_score_conversion - confidence) / model_config.face_recognition_max_score_conversion) * 100.00) / 100.0
 
-                                    if model_config.face_recognition_model == "LBPH":
-                                        confidence = round(100 - confidence) / 100.0
-                                    if model_config.face_recognition_model == "Fisher":
-                                        confidence = round(500 - confidence) / 100.0
-                                    if model_config.face_recognition_model == "Eigen":
-                                        confidence = round(5000 - confidence) / 100.0
-
-                                    logger.info(f"Face Recognized {name} {confidence}")
+                                    #if model_config.face_recognition_model == "LBPH":
+                                    #    confidence = round(100 - confidence) / 100.0
+                                    #if model_config.face_recognition_model == "Fisher":
+                                    #    confidence = round(500 - confidence) / 100.0
+                                    #if model_config.face_recognition_model == "Eigen":
+                                    #    confidence = round(5000 - confidence) / 100.0
 
                                     if id > 0 and confidence >= model_config.face_recognition_min_score:
+                                        logger.info(f"Face Recognized:{name} confidence:{confidence} camera:{camera_name} Accepted")
                                         obj["sub_label"] = name
                                         obj["sub_label_score"] = confidence
+                                        obj["sub_label_cur"] = name
+                                        obj["sub_label_cur_score"] = confidence
+                                    else:
+                                        logger.info(f"Face Recognized:{name} confidence:{confidence} camera:{camera_name} Rejected")
 
                             if os.path.exists(FACES_DIR + "/captureenabled"):
                                 if ("Any" in model_config.face_training_camera) or (camera_name in model_config.face_training_camera):
-                                    now = datetime.datetime.now().timestamp()
-                                    rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
-                                    face_id = f"{now}-{rand_id}"
+                                    if (model_config.face_training_unknown_only == False) or (id <= 0):
+                                        now = datetime.datetime.now().timestamp()
+                                        rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                                        face_id = f"{now}-{rand_id}"
 
-                                    face = {
-                                        Face.id: face_id,
-                                        Face.capture_time: now,
-                                        Face.data: {},
-                                    }
+                                        face = {
+                                            Face.id: face_id,
+                                            Face.capture_time: now,
+                                            Face.data: {},
+                                        }
 
-                                    face_queue.put(
-                                        (
-                                            "face",
-                                            face_id,
-                                            -1,
-                                            now,
+                                        face_queue.put(
+                                            (
+                                                "face",
+                                                face_id,
+                                                -1,
+                                                now,
+                                            )
                                         )
-                                    )
 
-                                    np.save(FACES_DIR + "/" + face_id, cropped);
+                                        np.save(FACES_DIR + "/" + face_id, cropped);
 
             detections[obj["id"]] = {**obj, "attributes": attributes}
 

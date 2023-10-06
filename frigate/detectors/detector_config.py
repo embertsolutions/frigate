@@ -69,10 +69,14 @@ class ModelConfig(BaseModel):
     face_recognition_max_area: int = Field(
         default=24000000, title="Face Recognition Maximum area of bounding box for object to be counted."
     )
+    face_recognition_max_score_conversion: Optional[float] = Field(
+        default=100, title="Face Recognition Inverse scale for value."
+    )
     face_recognition_min_score: Optional[float] = Field(
         default=0.5, title="Face Recognition Minimum detection confidence for object to be counted."
     )
     face_training_camera: Optional[str] = Field(default="Any", title="Face Training Camera.")
+    face_training_unknown_only: Optional[bool] = Field(default=True, title="Face Training unknown faces only.")
 
     _merged_labelmap: Optional[Dict[int, str]] = PrivateAttr()
     _merged_facelabelmap: Optional[Dict[int, str]] = PrivateAttr()

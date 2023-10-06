@@ -10,9 +10,13 @@ export default function Logs() {
   const [logService, setLogService] = useState('frigate');
   const [logs, setLogs] = useState('frigate');
 
-  const { data: frigateLogs } = useSWR('logs/frigate');
+  const { data: frigateLogs, mutate } = useSWR('logs/frigate');
   const { data: go2rtcLogs } = useSWR('logs/go2rtc');
   const { data: nginxLogs } = useSWR('logs/nginx');
+
+  const handleRefresh = useCallback(() => {
+    mutate();
+  });
 
   const handleCopyLogs = useCallback(() => {
     copy(logs);
@@ -37,6 +41,10 @@ export default function Logs() {
       <Heading>Logs</Heading>
 
       <ButtonsTabbed viewModes={['frigate', 'go2rtc', 'nginx']} currentViewMode={logService} setViewMode={setLogService} />
+
+      <Button className="" onClick={handleRefresh}>
+        Refresh
+      </Button>
 
       <Button className="" onClick={handleCopyLogs}>
         Copy to Clipboard

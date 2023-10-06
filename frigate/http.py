@@ -957,8 +957,8 @@ def face_dectector_thumbnail(id):
 
     height, width = best_frame.shape
 
-    logger.error(f"Gray Crop{current_app.frigate_config.model.face_recognition_width_crop}")
-    logger.error(f"Gray Crop{current_app.frigate_config.model.face_recognition_height_crop}")
+    #logger.error(f"Gray Crop{current_app.frigate_config.model.face_recognition_width_crop}")
+    #logger.error(f"Gray Crop{current_app.frigate_config.model.face_recognition_height_crop}")
 
     x_min, y_min, x_max, y_max = calculate_gray_face_region(width, height, current_app.frigate_config.model.face_recognition_width_crop, current_app.frigate_config.model.face_recognition_height_crop)
 

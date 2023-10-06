@@ -605,6 +605,9 @@ export default function Events({ path, ...props }) {
                         <div className="capitalize text-lg font-bold">
                           {event.label.replaceAll('_', ' ')}
                           {event.sub_label ? `: ${event.sub_label.replaceAll('_', ' ')}` : null}
+                          {(event?.data?.sub_label_cur_score || 0) == 0
+                            ? null
+                            : ` (${event?.data?.sub_label_cur})`}
                         </div>
 
                         <div className="text-sm flex">
@@ -634,6 +637,9 @@ export default function Events({ path, ...props }) {
                           {(event?.data?.sub_label_score || 0) == 0
                             ? null
                             : `, ${event.sub_label}: ${(event?.data?.sub_label_score * 100).toFixed(0)}%`}
+                          {(event?.data?.sub_label_cur_score || 0) == 0
+                            ? null
+                            : ` (${event?.data?.sub_label_cur}: ${(event?.data?.sub_label_cur_score * 100).toFixed(0)}%)`}
                         </div>
                       </div>
                       <div class="hidden sm:flex flex-col justify-end mr-2">

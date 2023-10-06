@@ -222,6 +222,7 @@ class TrackedObject:
                 max_logo = max(recognized_logos, key=recognized_logos.get)
                 self.obj_data["sub_label"] = (max_logo, recognized_logos[max_logo])
 
+        # Report the best sub_label ever seen for each detection
         if self.obj_data.get("sub_label"):
             if obj_data.get("sub_label"):
                 if self.obj_data["sub_label_score"] > obj_data["sub_label_score"]:
@@ -269,6 +270,8 @@ class TrackedObject:
             "label": self.obj_data["label"],
             "sub_label": self.obj_data.get("sub_label"),
             "sub_label_score": self.obj_data.get("sub_label_score"),
+            "sub_label_cur": self.obj_data.get("sub_label_cur"),
+            "sub_label_cur_score": self.obj_data.get("sub_label_cur_score"),
             "top_score": self.top_score,
             "false_positive": self.false_positive,
             "start_time": self.obj_data["start_time"],
@@ -526,6 +529,14 @@ class CameraState:
                     )
                     else obj["sub_label"]
                 )
+                text_cur = (
+                    ""
+                    if (
+                        not obj.get("sub_label_cur")
+                        or not is_label_printable(obj["sub_label_cur"])
+                    )
+                    else obj["sub_label_cur"]
+                )
                 score = (
                     obj["score"]
                     if (
@@ -533,17 +544,51 @@ class CameraState:
                     )
                     else obj["sub_label_score"]
                 )
-                draw_box_with_label(
-                    frame_copy,
-                    box[0],
-                    box[1],
-                    box[2],
-                    box[3],
-                    text,
-                    f"{score:.0%} {int(obj['area'])}",
-                    thickness=thickness,
-                    color=color,
+                score_cur = (
+                    0
+                    if (
+                        not obj.get("sub_label_cur_score")
+                    )
+                    else obj["sub_label_cur_score"]
                 )
+                #logger.info(f"Current Frame: {text}({text_cur}){score:.0%}({score_cur:.0%})")
+                if (text_cur in text):
+                    if (obj["label"] in text):
+                        draw_box_with_label(
+                            frame_copy,
+                            box[0],
+                            box[1],
+                            box[2],
+                            box[3],
+                            text,
+                            f"{score:.0%} {int(obj['area'])}",
+                            thickness=thickness,
+                            color=color,
+                        )
+                    else:
+                        draw_box_with_label(
+                            frame_copy,
+                            box[0],
+                            box[1],
+                            box[2],
+                            box[3],
+                            text,
+                            f"{score:.0%} ({score_cur:.0%}) {int(obj['area'])}",
+                            thickness=thickness,
+                            color=color,
+                        )
+                else:
+                    draw_box_with_label(
+                        frame_copy,
+                        box[0],
+                        box[1],
+                        box[2],
+                        box[3],
+                        f"{text} ({text_cur})",
+                        f"{score:.0%} ({score_cur:.0%}) {int(obj['area'])}",
+                        thickness=thickness,
+                        color=color,
+                    )
 
                 # draw any attributes
                 for attribute in obj["current_attributes"]:

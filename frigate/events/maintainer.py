@@ -212,6 +212,10 @@ class EventProcessor(threading.Thread):
                 event[Event.sub_label] = event_data["sub_label"]
                 event[Event.data]["sub_label_score"] = event_data["sub_label_score"]
 
+            if event_data.get("sub_label_cur") is not None:
+                event[Event.data]["sub_label_cur"] = event_data["sub_label_cur"]
+                event[Event.data]["sub_label_cur_score"] = event_data["sub_label_cur_score"]
+
             (
                 Event.insert(event)
                 .on_conflict(
