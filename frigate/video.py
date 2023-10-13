@@ -24,6 +24,7 @@ from frigate.models import Face, FaceLabel
 from frigate.motion import MotionDetector
 from frigate.motion.improved_motion import ImprovedMotionDetector
 from frigate.object_detection import RemoteObjectDetector
+from frigate.face_detection import RemoteFaceDetector
 from frigate.ptz.autotrack import ptz_moving_at_frame_time
 from frigate.track import ObjectTracker
 from frigate.track.norfair_tracker import NorfairTracker
@@ -43,8 +44,12 @@ from frigate.util.image import (
     yuv_region_2_yuv,
     yuv_crop_and_resize_face,
     calculate_gray_face_region,
+    compare_eu_distance,
+    cos_similarity,
 )
 from frigate.util.services import listen
+from frigate.face_detection import RemoteFaceDetector
+
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +117,14 @@ def get_min_region_size(model_config: ModelConfig) -> int:
 
     return int((half + 3) / 4) * 4
 
+def get_min_face_detection_region_size(model_config: ModelConfig) -> int:
+    """Get the min region size and ensure it is divisible by 4."""
+    half = int(max(model_config.face_detection_height, model_config.face_detection_width) / 2)
+
+    if half % 4 == 0:
+        return half
+
+    return int((half + 3) / 4) * 4
 
 def create_tensor_input(frame, model_config: ModelConfig, region):
     if model_config.input_pixel_format == PixelFormatEnum.rgb:
@@ -126,6 +139,25 @@ def create_tensor_input(frame, model_config: ModelConfig, region):
         cropped_frame = cv2.resize(
             cropped_frame,
             dsize=(model_config.width, model_config.height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+
+    # Expand dimensions since the model expects images to have shape: [1, height, width, 3]
+    return np.expand_dims(cropped_frame, axis=0)
+
+def create_face_detection_tensor_input(frame, model_config: ModelConfig, region):
+    if model_config.input_pixel_format == PixelFormatEnum.rgb:
+        cropped_frame = yuv_region_2_rgb(frame, region)
+    elif model_config.input_pixel_format == PixelFormatEnum.bgr:
+        cropped_frame = yuv_region_2_bgr(frame, region)
+    else:
+        cropped_frame = yuv_region_2_yuv(frame, region)
+
+    # Resize if needed
+    if cropped_frame.shape != (model_config.face_detection_height, model_config.face_detection_width, 3):
+        cropped_frame = cv2.resize(
+            cropped_frame,
+            dsize=(model_config.face_detection_width, model_config.face_detection_height),
             interpolation=cv2.INTER_LINEAR,
         )
 
@@ -509,17 +541,20 @@ def track_camera(
         name, labelmap, detection_queue, result_connection, model_config, stop_event
     )
 
-    face_detector = RemoteObjectDetector(
+    face_detector = RemoteFaceDetector(
         name, facelabelmap, facedetection_queue, faceresult_connection, model_config, stop_event
     )
 
-    if model_config.face_recognition_model == "LBPH":
-        face_recognizer = cv2.face.LBPHFaceRecognizer_create()
-    if model_config.face_recognition_model == "Fisher":
-        face_recognizer = cv2.face.FisherFaceRecognizer_create()
-    if model_config.face_recognition_model == "Eigen":
-        face_recognizer = cv2.face.EigenFaceRecognizer_create()
-    face_recognizer.read('/facerecognition_default.yml')
+    if "DOODS" in model_config.face_recognition_model:
+        face_recognizer = None
+    else:
+        if model_config.face_recognition_model == "LBPH":
+            face_recognizer = cv2.face.LBPHFaceRecognizer_create()
+        if model_config.face_recognition_model == "Fisher":
+            face_recognizer = cv2.face.FisherFaceRecognizer_create()
+        if model_config.face_recognition_model == "Eigen":
+            face_recognizer = cv2.face.EigenFaceRecognizer_create()
+        face_recognizer.read('/facerecognition_default.yml')
 
     object_tracker = NorfairTracker(config, ptz_metrics)
 
@@ -633,6 +668,50 @@ def detect(
         detections.append(det)
     return detections
 
+def face_detect(
+    detect_config: DetectConfig,
+    object_detector,
+    frame,
+    model_config,
+    region,
+    objects_to_track,
+    object_filters,
+):
+    tensor_input = create_face_detection_tensor_input(frame, model_config, region)
+
+    detections = []
+    region_detections = object_detector.detect(tensor_input)
+    for d in region_detections:
+        box = d[2]
+        size = region[2] - region[0]
+        x_min = int(max(0, (box[1] * size) + region[0]))
+        y_min = int(max(0, (box[0] * size) + region[1]))
+        x_max = int(min(detect_config.width - 1, (box[3] * size) + region[0]))
+        y_max = int(min(detect_config.height - 1, (box[2] * size) + region[1]))
+
+        # ignore objects that were detected outside the frame
+        if (x_min >= detect_config.width - 1) or (y_min >= detect_config.height - 1):
+            continue
+
+        width = x_max - x_min
+        height = y_max - y_min
+        area = width * height
+        ratio = width / max(1, height)
+        det = (
+            d[0],
+            d[1],
+            (x_min, y_min, x_max, y_max),
+            area,
+            ratio,
+            region,
+            d[3],
+        )
+        # apply object filters
+        if filtered(det, objects_to_track, object_filters):
+            continue
+        detections.append(det)
+    return detections
+
 def import_face_detect(
     config: FrigateConfig,
     frame,
@@ -642,7 +721,7 @@ def import_face_detect(
     height,
     width,
 ):
-    object_detector = RemoteObjectDetector(
+    object_detector = RemoteFaceDetector(
         "Import", config.model.merged_facelabelmap, facedetection_queue, faceresult_connection, config.model, stop_event
     )
 
@@ -650,7 +729,7 @@ def import_face_detect(
 
     logger.error(f"region{region}")
 
-    tensor_input = create_tensor_input(frame, config.model, region)
+    tensor_input = create_face_detection_tensor_input(frame, config.model, region)
 
     detections = []
     region_detections = object_detector.detect(tensor_input)
@@ -677,6 +756,7 @@ def import_face_detect(
             area,
             ratio,
             region,
+            d[3],
         )
         detections.append(det)
     return detections
@@ -810,7 +890,7 @@ def process_frames(
     frame_manager: FrameManager,
     motion_detector: MotionDetector,
     object_detector: RemoteObjectDetector,
-    face_detector: RemoteObjectDetector,
+    face_detector: RemoteFaceDetector,
     face_recognizer,
     object_tracker: ObjectTracker,
     detected_objects_queue: mp.Queue,
@@ -835,6 +915,7 @@ def process_frames(
     startup_scan_counter = 0
 
     region_min_size = get_min_region_size(model_config)
+    face_detection_region_min_size = get_min_face_detection_region_size(model_config)
 
     while not stop_event.is_set():
         try:
@@ -953,6 +1034,8 @@ def process_frames(
                 if obj["id"] in stationary_object_ids
             ]
 
+            face_detections = []
+
             for region in regions:
                 raw_detections = detect(
                         detect_config,
@@ -964,6 +1047,24 @@ def process_frames(
                         object_filters,
                     )
                 detections.extend( raw_detections )
+
+                if "face" in objects_to_track:
+                    if model_config.face_recognition_area == "Regions":
+                        for raw_detection in raw_detections:
+                            if raw_detection[0] == "person":
+                                raw_face_detections = face_detect(
+                                        detect_config,
+                                        face_detector,
+                                        frame,
+                                        model_config,
+                                        region,
+                                        objects_to_track,
+                                        object_filters,
+                                    )
+
+                                for raw_face_detection in raw_face_detections:
+                                    if raw_face_detection[0] == "face":
+                                        face_detections.append( raw_face_detection )
 
             #########
             # merge objects
@@ -1016,33 +1117,36 @@ def process_frames(
                 ]
 
                 if "face" in objects_to_track:
-                    for tracked_detection in tracked_detections:
-                        if tracked_detection[0] == "person":
-#                            logger.info("Person Detected")
-                            region = calculate_region(
-                                    frame_shape,
-                                    tracked_detection[2][0],
-                                    tracked_detection[2][1],
-                                    tracked_detection[2][2],
-                                    tracked_detection[2][3],
-                                    region_min_size,
-                                    multiplier=1.1,
-                            )
-
-                            raw_face_detections = detect(
-                                    detect_config,
-                                    face_detector,
-                                    frame,
-                                    model_config,
-                                    region,
-                                    objects_to_track,
-                                    object_filters,
+                    if model_config.face_recognition_area == "Tracked":
+                        for tracked_detection in tracked_detections:
+                            if tracked_detection[0] == "person":
+                                face_region = calculate_region(
+                                        frame_shape,
+                                        tracked_detection[2][0],
+                                        tracked_detection[2][1],
+                                        tracked_detection[2][2],
+                                        tracked_detection[2][3],
+                                        face_detection_region_min_size,
+                                        multiplier=1.0,
                                 )
 
-                            for raw_face_detection in raw_face_detections:
-                                if raw_face_detection[0] == "face":
-#                                    logger.info("Face Detected")
-                                    consolidated_detections.append(raw_face_detection)
+                                raw_face_detections = face_detect(
+                                        detect_config,
+                                        face_detector,
+                                        frame,
+                                        model_config,
+                                        face_region,
+                                        objects_to_track,
+                                        object_filters,
+                                    )
+
+                                for raw_face_detection in raw_face_detections:
+                                    if raw_face_detection[0] == "face":
+                                        consolidated_detections.append(raw_face_detection)
+
+                    if model_config.face_recognition_area == "Regions":
+                        for face_detection in face_detections:
+                            consolidated_detections.append(face_detection)
 
                 # now that we have refined our detections, we need to track objects
                 object_tracker.match_and_update(frame_time, tracked_detections)
@@ -1063,6 +1167,10 @@ def process_frames(
             attributes = []
             # if the objects label has associated attribute detections
             if obj["label"] in attribute_detections.keys():
+                max_face_area = 0
+                max_face_label_id = -1
+                max_face_confidence = -10000
+
                 # add them to attributes if they intersect
                 for attribute_detection in attribute_detections[obj["label"]]:
                     if box_inside(obj["box"], (attribute_detection[2])):
@@ -1074,52 +1182,45 @@ def process_frames(
                             }
                         )
 
-                        if (obj["area"] >= model_config.face_recognition_min_area) and (obj["area"] <= model_config.face_recognition_max_area):
-                            face_region = calculate_face_region(
-                                    attribute_detection[2][0],
-                                    attribute_detection[2][1],
-                                    attribute_detection[2][2],
-                                    attribute_detection[2][3],
-                            )
+                        attribute_area = area(attribute_detection[2])
 
-                            cropped = yuv_crop_and_resize_face(frame, face_region)
+                        if face_recognizer is not None:
 
-                            gray_frame = cv2.cvtColor(cropped, cv2.COLOR_YUV2GRAY_I420)
+                            if (attribute_area >= model_config.face_recognition_min_area) and (attribute_area <= model_config.face_recognition_max_area):
+                                face_region = calculate_face_region(
+                                        attribute_detection[2][0],
+                                        attribute_detection[2][1],
+                                        attribute_detection[2][2],
+                                        attribute_detection[2][3],
+                                )
 
-                            height, width = gray_frame.shape
+                                cropped = yuv_crop_and_resize_face(frame, face_region)
 
-                            # logger.info(f"Gray Frame: {height}:{width}")
+                                gray_frame = cv2.cvtColor(cropped, cv2.COLOR_YUV2GRAY_I420)
 
-                            x_min, y_min, x_max, y_max = calculate_gray_face_region(width, height, model_config.face_recognition_width_crop, model_config.face_recognition_height_crop)
+                                height, width = gray_frame.shape
 
-                            # [rows,columns] [ymin:ymax,xmin:xmax]
-                            gray_face = cv2.resize(gray_frame[y_min:y_max,x_min:x_max],
-                                                   dsize=(360, 360),
-                                                   interpolation=cv2.INTER_CUBIC,
-                                                  )
-                            gray_face = cv2.equalizeHist(gray_face)
-                        
-                            start = time.monotonic_ns()
-                            try:
-                               id, confidence = face_recognizer.predict(gray_face)
-                            except:
-                               id, confidence = -1, 10000
-                            stop = time.monotonic_ns()
-                            elapsed = round((stop - start) / 1000000, 0)
-                            logger.info(f"Face Recognition Time: {elapsed}ms")
-                            logger.info(f"Face id:{id} rawconfidence:{round(confidence, 2)} camera:{camera_name}")
-                            # Check if confidence is less them 100 ==> "0" is perfect match 
-                            if (id >= 0 and confidence <= 10000):
-                                name = "" 
-                                found = True
+                                x_min, y_min, x_max, y_max = calculate_gray_face_region(width, height, model_config.face_recognition_width_crop, model_config.face_recognition_height_crop)
 
+                                # [rows,columns] [ymin:ymax,xmin:xmax]
+                                gray_face = cv2.resize(gray_frame[y_min:y_max,x_min:x_max],
+                                                    dsize=(360, 360),
+                                                    interpolation=cv2.INTER_CUBIC,
+                                                    )
+                                gray_face = cv2.equalizeHist(gray_face)
+                            
+                                start = time.monotonic_ns()
                                 try:
-                                    facelabel: FaceLabel = FaceLabel.get(FaceLabel.id == id)
-                                except DoesNotExist:
-                                    found = False
-                                
-                                if (found):
-                                    name = facelabel.label
+                                    id, confidence = face_recognizer.predict(gray_face)
+                                except:
+                                    id, confidence = -1, 10000
+                                stop = time.monotonic_ns()
+                                elapsed = round((stop - start) / 1000000, 0)
+                                logger.info(f"Face Recognition Time: {elapsed}ms")
+                                logger.info(f"Face id:{id} rawconfidence:{round(confidence, 2)} camera:{camera_name}")
+
+                                # Check if confidence is less them 100 ==> "0" is perfect match 
+                                if (id >= 0 and confidence <= 10000):                                   
                                     confidence = round(((model_config.face_recognition_max_score_conversion - confidence) / model_config.face_recognition_max_score_conversion) * 100.00) / 100.0
 
                                     #if model_config.face_recognition_model == "LBPH":
@@ -1130,37 +1231,139 @@ def process_frames(
                                     #    confidence = round(5000 - confidence) / 100.0
 
                                     if id > 0 and confidence >= model_config.face_recognition_min_score:
-                                        logger.info(f"Face Recognized:{name} confidence:{confidence} camera:{camera_name} Accepted")
-                                        obj["sub_label"] = name
-                                        obj["sub_label_score"] = confidence
-                                        obj["sub_label_cur"] = name
-                                        obj["sub_label_cur_score"] = confidence
+                                        logger.info(f"OpenCV Face Recognized:{id} confidence:{confidence} camera:{camera_name} Accepted")
+                                        if attribute_area > max_face_area:
+                                            max_face_area = attribute_area
+                                            max_face_label_id = id
+                                            max_face_confidence = confidence
                                     else:
-                                        logger.info(f"Face Recognized:{name} confidence:{confidence} camera:{camera_name} Rejected")
+                                        logger.info(f"OpenCV Face Recognized:{id} confidence:{confidence} camera:{camera_name} Rejected")
 
-                            if os.path.exists(FACES_DIR + "/captureenabled"):
-                                if ("Any" in model_config.face_training_camera) or (camera_name in model_config.face_training_camera):
-                                    if (model_config.face_training_unknown_only == False) or (id <= 0):
-                                        now = datetime.datetime.now().timestamp()
-                                        rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
-                                        face_id = f"{now}-{rand_id}"
+                                if os.path.exists(FACES_DIR + "/captureenabled"):
+                                    if ("Any" in model_config.face_training_camera) or (camera_name in model_config.face_training_camera):
+                                        if (model_config.face_training_unknown_only == False) or (id <= 0):
+                                            now = datetime.datetime.now().timestamp()
+                                            rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                                            face_id = f"{now}-{rand_id}"
 
-                                        face = {
-                                            Face.id: face_id,
-                                            Face.capture_time: now,
-                                            Face.data: {},
-                                        }
-
-                                        face_queue.put(
-                                            (
-                                                "face",
-                                                face_id,
-                                                -1,
-                                                now,
+                                            face_queue.put(
+                                                (
+                                                    "face",
+                                                    face_id,
+                                                    -1,
+                                                    now,
+                                                    attribute_detection[6],
+                                                )
                                             )
-                                        )
 
-                                        np.save(FACES_DIR + "/" + face_id, cropped);
+                                            np.save(FACES_DIR + "/" + face_id, cropped);
+
+                        if "DOODS" in model_config.face_recognition_model:
+                            if (attribute_area >= model_config.face_recognition_min_area) and (attribute_area <= model_config.face_recognition_max_area):
+                                selected_columns = [
+                                    Face.id,
+                                    Face.label_id,
+                                    Face.capture_time,
+                                    Face.data,
+                                ]
+
+                                faces = (
+                                    Face.select(*selected_columns)
+                                )
+
+                                id = -1
+                                max_eu = 0
+                                max_eu_label_id = -1
+                                max_cos = 0
+                                max_cos_label_id = -1
+
+                                start = time.monotonic_ns()
+                                for f in faces:
+                                    if f.label_id >= 0:
+                                        if f.data.get("embeddings") is not None:
+                                            embeddingsstr = f.data["embeddings"]
+                                            embeddings = np.fromstring(embeddingsstr, dtype=float, sep=' ')
+                                            eu_score = compare_eu_distance(embeddings, attribute_detection[6])
+                                            cos_score = cos_similarity(embeddings, attribute_detection[6])
+
+                                            if (eu_score > max_eu):
+                                                max_eu = eu_score
+                                                max_eu_label_id = f.label_id
+                                            if (cos_score > max_cos):
+                                                max_cos = cos_score
+                                                max_cos_label_id = f.label_id
+                                stop = time.monotonic_ns()
+                                elapsed = round((stop - start) / 1000000, 0)
+                                logger.info(f"Face Recognition Time: {elapsed}ms")
+
+                                if ("DOODS_EU" in model_config.face_recognition_model) and (max_eu_label_id >= 0):
+                                    id = max_eu_label_id
+                                    confidence = max_eu
+
+                                    if max_eu_label_id > 0 and confidence >= model_config.face_recognition_min_score:
+                                        logger.info(f"FaceNet eu Face Recognized:{max_eu_label_id} confidence:{confidence} camera:{camera_name} Accepted")
+                                        if attribute_area > max_face_area:
+                                            max_face_area = attribute_area
+                                            max_face_label_id = id
+                                            max_face_confidence = confidence
+                                    else:
+                                        logger.info(f"FaceNet eu Face Recognized:{max_eu_label_id} confidence:{confidence} camera:{camera_name} Rejected")
+
+                                if ("DOODS_COS" in model_config.face_recognition_model) and (max_cos_label_id >= 0):
+                                    id = max_cos_label_id
+                                    confidence = max_cos
+
+                                    if max_cos_label_id > 0 and confidence >= model_config.face_recognition_min_score:
+                                        logger.info(f"FaceNet cos Face Recognized:{max_cos_label_id} confidence:{confidence} camera:{camera_name} Accepted")
+                                        if attribute_area > max_face_area:
+                                            max_face_area = attribute_area
+                                            max_face_label_id = id
+                                            max_face_confidence = confidence
+                                    else:
+                                        logger.info(f"FaceNet cos Face Recognized:{max_cos_label_id} confidence:{confidence} camera:{camera_name} Rejected")
+
+                                if os.path.exists(FACES_DIR + "/captureenabled"):
+                                    if ("Any" in model_config.face_training_camera) or (camera_name in model_config.face_training_camera):
+                                        if (model_config.face_training_unknown_only == False) or (id <= 0):
+                                            face_region = calculate_face_region(
+                                                    attribute_detection[2][0],
+                                                    attribute_detection[2][1],
+                                                    attribute_detection[2][2],
+                                                    attribute_detection[2][3],
+                                            )
+
+                                            cropped = yuv_crop_and_resize_face(frame, face_region)
+
+                                            now = datetime.datetime.now().timestamp()
+                                            rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                                            face_id = f"{now}-{rand_id}"
+
+                                            face_queue.put(
+                                                (
+                                                    "face",
+                                                    face_id,
+                                                    -1,
+                                                    now,
+                                                    attribute_detection[6],
+                                                )
+                                            )
+
+                                            np.save(FACES_DIR + "/" + face_id, cropped);
+
+                if (max_face_label_id != -1) and (max_face_confidence != -10000):
+                    found = True
+
+                    try:
+                        facelabel: FaceLabel = FaceLabel.get(FaceLabel.id == max_face_label_id)
+                    except DoesNotExist:
+                        found = False
+                    
+                    if (found):
+                        logger.info(f"Face Recognized:{facelabel.label} confidence:{max_face_confidence} camera:{camera_name}")
+                        obj["sub_label"] = facelabel.label
+                        obj["sub_label_score"] = max_face_confidence
+                        obj["sub_label_cur"] = facelabel.label
+                        obj["sub_label_cur_score"] = max_face_confidence
 
             detections[obj["id"]] = {**obj, "attributes": attributes}
 

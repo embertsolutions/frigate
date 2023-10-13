@@ -271,7 +271,7 @@ export default function System() {
               className="rounded-full"
               type="text"
               color="gray"
-              aria-label="Momentary resource usage of each process that is controlling the object detector. CPU % is for a single core."
+              aria-label="Momentary resource usage of each process that is controlling the face detector. CPU % is for a single core."
             >
               <About className="w-5" />
             </Button>

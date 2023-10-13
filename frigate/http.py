@@ -884,7 +884,10 @@ def face_thumbnail(id, max_cache_age=2592000):
     except DoesNotExist:
         return "Face not found", 404
 
-    image = np.load(FACES_DIR + "/" + face.id + ".npy")
+    try:
+        image = np.load(FACES_DIR + "/" + face.id + ".npy")
+    except:
+        return "Event not found", 404
 
     if image is None:
         return "Event not found", 404
@@ -942,31 +945,47 @@ def face_dectector_thumbnail(id):
     except DoesNotExist:
         return "Face not found", 404
 
-    image = np.load(FACES_DIR + "/" + face.id + ".npy")
+    try:
+        image = np.load(FACES_DIR + "/" + face.id + ".npy")
+    except:
+        return "Event not found", 404
 
     if image is None:
         return "Event not found", 404
 
-    try:
-        best_frame = cv2.cvtColor(
-            image,
-            cv2.COLOR_YUV2GRAY_I420,
+    if "DOODS" in current_app.frigate_config.model.face_recognition_model:
+        try:
+            best_frame = cv2.cvtColor(
+                image,
+                cv2.COLOR_YUV2BGR_I420,
+            )
+        except KeyError:
+            return "Event not found", 404
+
+        best_frame = cv2.resize(
+            best_frame, dsize=(175, 175), interpolation=cv2.INTER_AREA
         )
-    except KeyError:
-        return "Event not found", 404
+    else:
+        try:
+            best_frame = cv2.cvtColor(
+                image,
+                cv2.COLOR_YUV2GRAY_I420,
+            )
+        except KeyError:
+            return "Event not found", 404
 
-    height, width = best_frame.shape
+        height, width = best_frame.shape
 
-    #logger.error(f"Gray Crop{current_app.frigate_config.model.face_recognition_width_crop}")
-    #logger.error(f"Gray Crop{current_app.frigate_config.model.face_recognition_height_crop}")
+        #logger.error(f"Gray Crop{current_app.frigate_config.model.face_recognition_width_crop}")
+        #logger.error(f"Gray Crop{current_app.frigate_config.model.face_recognition_height_crop}")
 
-    x_min, y_min, x_max, y_max = calculate_gray_face_region(width, height, current_app.frigate_config.model.face_recognition_width_crop, current_app.frigate_config.model.face_recognition_height_crop)
+        x_min, y_min, x_max, y_max = calculate_gray_face_region(width, height, current_app.frigate_config.model.face_recognition_width_crop, current_app.frigate_config.model.face_recognition_height_crop)
 
-    best_frame = cv2.resize(
-        best_frame[y_min:y_max,x_min:x_max], dsize=(175, 175), interpolation=cv2.INTER_CUBIC
-    )
+        best_frame = cv2.resize(
+            best_frame[y_min:y_max,x_min:x_max], dsize=(175, 175), interpolation=cv2.INTER_CUBIC
+        )
 
-    best_frame = cv2.equalizeHist(best_frame)
+        best_frame = cv2.equalizeHist(best_frame)
 
     ret, jpg = cv2.imencode(
         ".jpg", best_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70]
@@ -1511,18 +1530,13 @@ def faces_import(id):
         rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
         face_id = f"{now}-{rand_id}"
 
-        face = {
-            Face.id: face_id,
-            Face.capture_time: now,
-            Face.data: {},
-        }
-
         current_app.face_queue.put(
             (
                 "face",
                 face_id,
                 int(id),
                 now,
+                raw_face_detection[6],
             )
         )
 
@@ -1543,13 +1557,40 @@ def faces_import(id):
 @bp.route("/faces/forceretrain", methods=["POST"])
 def faces_forceretrain():
 
-    try:
-        restart_frigate()
-    except Exception as e:
-        logging.error(f"Error restarting Frigate: {e}")
-        return make_response(
-            jsonify({"success": True, "message": "Unable to force retrain."}), 400
+    if "DOODS" in current_app.frigate_config.model.face_recognition_model:
+        selected_columns = [
+            Face.id,
+            Face.label_id,
+            Face.capture_time,
+            Face.data,
+        ]
+
+        faces = (
+            Face.select(*selected_columns)
         )
+
+        for f in faces:
+            if f.label_id != None:
+                frame = np.load(FACES_DIR + "/" + f.id + ".npy")
+
+                height, width = frame.shape
+
+                raw_face_detections = import_face_detect(current_app.frigate_config, frame, current_app.facedetection_queue, current_app.faceresult_connection, current_app.stop_event, height, width)
+
+                for raw_face_detection in raw_face_detections:
+                    embeddings_str = ' '.join(str(e) for e in raw_face_detection[6])
+                    f.data = { "embeddings": embeddings_str }
+                    f.save()
+
+                time.sleep(0.1)
+    else:
+        try:
+            restart_frigate()
+        except Exception as e:
+            logging.error(f"Error restarting Frigate: {e}")
+            return make_response(
+                jsonify({"success": True, "message": "Unable to force retrain."}), 400
+            )
 
     return make_response(
         jsonify(
@@ -1589,6 +1630,11 @@ def config():
 
     for facedetector, facedetector_config in config["facedetectors"].items():
         facedetector_config["model"][
+            "facelabelmap"
+        ] = current_app.frigate_config.model.merged_facelabelmap
+
+    for facerecogniser, facerecogniser_config in config["facerecognisers"].items():
+        facerecogniser_config["model"][
             "facelabelmap"
         ] = current_app.frigate_config.model.merged_facelabelmap
 

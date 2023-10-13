@@ -43,6 +43,7 @@ from frigate.util.image import calculate_gray_face_region
 from frigate.log import log_process, root_configurer
 from frigate.models import Event, Face, FaceLabel, Recordings, RecordingsToDelete, Timeline
 from frigate.object_detection import ObjectDetectProcess
+from frigate.face_detection import FaceDetectProcess
 from frigate.object_processing import TrackedObjectProcessor
 from frigate.output import output_frames
 from frigate.plus import PlusApi
@@ -57,6 +58,7 @@ from frigate.types import CameraMetricsTypes, FeatureMetricsTypes, PTZMetricsTyp
 from frigate.version import VERSION
 from frigate.video import capture_camera, track_camera
 from frigate.watchdog import FrigateWatchdog
+
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +101,25 @@ class FrigateApp:
             else:
                 logger.debug(f"Skipping directory: {d}")
 
+    def checkEmbeddings(self):
+        faceeembeddingsmissing = 0
+
+        selected_columns = [
+            Face.id,
+            Face.label_id,
+            Face.data,
+        ]
+
+        faces = (
+            Face.select(*selected_columns)
+        )
+
+        for f in faces:
+            if f.data.get("embeddings") is None:
+                faceeembeddingsmissing = faceeembeddingsmissing + 1
+
+        logger.info(f"{faceeembeddingsmissing} of {len(faces)} Faces Missing Embeddings")
+
     def getImagesAndLabels(self):
         faceSamples=[]
         ids = []
@@ -106,6 +127,7 @@ class FrigateApp:
         selected_columns = [
             Face.id,
             Face.label_id,
+            Face.data,
         ]
 
         faces = (
@@ -117,13 +139,14 @@ class FrigateApp:
                 image = np.load(FACES_DIR + "/" + f.id + ".npy")
                 gray_frame = cv2.cvtColor(image, cv2.COLOR_YUV2GRAY_I420)
                 height, width = gray_frame.shape
-                x_min, y_min, x_max, y_max = calculate_gray_face_region(width, height, self.config.model.face_recognition_width_crop, self.config.model.face_recognition_height_crop)
+                x_min, y_min, x_max, y_max = calculate_gray_face_region(width, height, self.config.model.width, self.config.model.height)
                 # [rows,columns] [ymin:ymax,xmin:xmax]
                 gray_face = cv2.resize(gray_frame[y_min:y_max,x_min:x_max],
                                         dsize=(360, 360),
                                         interpolation=cv2.INTER_CUBIC,
                                         )
                 gray_face = cv2.equalizeHist(gray_face)
+
                 faceSamples.append(gray_face)
                 ids.append(f.label_id)
 
@@ -131,24 +154,29 @@ class FrigateApp:
 
     def train_faces(self) -> None:
         logger.info("Training Faces Started")
-        faces,ids = self.getImagesAndLabels()
-        # Fisher and Eigen needs at least 2 ids
-        if len(np.unique(ids)) < 2:
-            self.config.model.face_recognition_model = "LBPH"
-        if self.config.model.face_recognition_model == "LBPH":
-            logger.info("Face Recognition LBPH")
-            recognizer = cv2.face.LBPHFaceRecognizer_create()
-        if self.config.model.face_recognition_model == "Fisher":
-            logger.info("Face Recognition Fisher")
-            recognizer = cv2.face.FisherFaceRecognizer_create()
-        if self.config.model.face_recognition_model == "Eigen":
-            logger.info("Face Recognition Eigen")
-            recognizer = cv2.face.EigenFaceRecognizer_create()
-        if len(faces) > 0:
-            recognizer.train(faces, np.array(ids))
-        logger.info(f"Training {len(faces)} Faces")
-        # Save the model into /facerecognition_default.yml
-        recognizer.write("/facerecognition_default.yml")
+
+        if "DOODS" in self.config.model.face_recognition_model:
+            self.checkEmbeddings()
+        else:
+            faces,ids = self.getImagesAndLabels()
+            # Fisher and Eigen needs at least 2 ids
+            if len(np.unique(ids)) < 2:
+                self.config.model.face_recognition_model = "LBPH"
+            if self.config.model.face_recognition_model == "LBPH":
+                logger.info("Face Recognition LBPH")
+                recognizer = cv2.face.LBPHFaceRecognizer_create()
+            if self.config.model.face_recognition_model == "Fisher":
+                logger.info("Face Recognition Fisher")
+                recognizer = cv2.face.FisherFaceRecognizer_create()
+            if self.config.model.face_recognition_model == "Eigen":
+                logger.info("Face Recognition Eigen")
+                recognizer = cv2.face.EigenFaceRecognizer_create()
+            if len(faces) > 0:
+                recognizer.train(faces, np.array(ids))
+            logger.info(f"Training {len(faces)} Faces")
+            # Save the model into /facerecognition_default.yml
+            recognizer.write("/facerecognition_default.yml")
+
         logger.info("Training Faces Completed")
 
     def init_logger(self) -> None:
@@ -511,7 +539,7 @@ class FrigateApp:
             try:
                 largest_frame = max(
                     [
-                        det.model.height * det.model.width * 3
+                        det.model.face_detection_height * det.model.face_detection_width * 3
                         for (name, det) in self.config.facedetectors.items()
                     ]
                 )
@@ -525,7 +553,7 @@ class FrigateApp:
 
             try:
                 shm_out = mp.shared_memory.SharedMemory(
-                    name=f"out-face{name}", create=True, size=20 * 6 * 4
+                    name=f"out-face{name}", create=True, size=20 * 134 * 4
                 )
             except FileExistsError:
                 shm_out = mp.shared_memory.SharedMemory(name=f"out-face{name}")
@@ -564,7 +592,7 @@ class FrigateApp:
         try:
             largest_frame = max(
                 [
-                    det.model.height * det.model.width * 3
+                    det.model.face_detection_height * det.model.face_detection_width * 3
                     for (name, det) in self.config.facedetectors.items()
                 ]
             )
@@ -578,7 +606,7 @@ class FrigateApp:
 
         try:
             shm_out = mp.shared_memory.SharedMemory(
-                name="out-faceImport", create=True, size=20 * 6 * 4
+                name="out-faceImport", create=True, size=20 * 134 * 4
             )
         except FileExistsError:
             shm_out = mp.shared_memory.SharedMemory(name="out-faceImport")
@@ -595,7 +623,7 @@ class FrigateApp:
             )
 
         for name, facedetector_config in self.config.facedetectors.items():
-            self.facedetectors[name] = ObjectDetectProcess(
+            self.facedetectors[name] = FaceDetectProcess(
                 name,
                 self.facedetection_queue,
                 self.facedetection_out_events,

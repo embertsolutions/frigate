@@ -1,10 +1,11 @@
 """Record events for object, audio, etc. detections."""
-
+import json
 import logging
 import queue
 import threading
 from multiprocessing import Queue
 from multiprocessing.synchronize import Event as MpEvent
+import numpy as np
 
 from frigate.config import FrigateConfig
 from frigate.events.maintainer import EventTypeEnum
@@ -38,13 +39,14 @@ class FaceProcessor(threading.Thread):
                     id,
                     label_id,
                     capture_time,
+                    embeddings,
                 ) = self.queue.get(timeout=1)
             except queue.Empty:
                 continue
 
             if type == "face":
                 self.handle_face(
-                    id, label_id, capture_time
+                    id, label_id, capture_time, embeddings
                 )
 
     def handle_face(
@@ -52,14 +54,17 @@ class FaceProcessor(threading.Thread):
         id: str,
         label_id: int,
         capture_time,
+        embeddings,
     ) -> None:
         """Handle face detection."""
+
+        embeddings_str = ' '.join(str(e) for e in embeddings)
 
         face_entry = {
             Face.id: id,
             Face.label_id: label_id,
             Face.capture_time: capture_time,
-            Face.data: {},
+            Face.data: { "embeddings": embeddings_str },
         }
 
         Face.insert(face_entry).execute()

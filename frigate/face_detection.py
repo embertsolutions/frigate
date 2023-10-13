@@ -16,25 +16,11 @@ from frigate.detectors.detector_config import InputTensorEnum
 from frigate.util.builtin import EventsPerSecond, load_labels
 from frigate.util.image import SharedMemoryFrameManager
 from frigate.util.services import listen
+from frigate.object_detection import ObjectDetector, tensor_transform
 
 logger = logging.getLogger(__name__)
 
-
-class ObjectDetector(ABC):
-    @abstractmethod
-    def detect(self, tensor_input, threshold=0.4):
-        pass
-
-
-def tensor_transform(desired_shape):
-    # Currently this function only supports BHWC permutations
-    if desired_shape == InputTensorEnum.nhwc:
-        return None
-    elif desired_shape == InputTensorEnum.nchw:
-        return (0, 3, 1, 2)
-
-
-class LocalObjectDetector(ObjectDetector):
+class LocalFaceDetector(ObjectDetector):
     def __init__(
         self,
         detector_config=None,
@@ -77,7 +63,7 @@ class LocalObjectDetector(ObjectDetector):
         raw_detections = self.detect_api.detect_raw(tensor_input=tensor_input)
         stop = time.monotonic_ns()
         elapsed = round((stop - start) / 1000000, 0)
-        logger.info(f"Detect Time: {elapsed}ms")
+        logger.info(f"Face Detect Time: {elapsed}ms")
         return raw_detections
 
 
@@ -105,12 +91,12 @@ def run_detector(
     signal.signal(signal.SIGINT, receiveSignal)
 
     frame_manager = SharedMemoryFrameManager()
-    object_detector = LocalObjectDetector(detector_config=detector_config)
+    object_detector = LocalFaceDetector(detector_config=detector_config)
 
     outputs = {}
     for name in out_events.keys():
-        out_shm = mp.shared_memory.SharedMemory(name=f"out-{name}", create=False)
-        out_np = np.ndarray((20, 6), dtype=np.float32, buffer=out_shm.buf)
+        out_shm = mp.shared_memory.SharedMemory(name=f"out-face{name}", create=False)
+        out_np = np.ndarray((20, 134), dtype=np.float32, buffer=out_shm.buf)
         outputs[name] = {"shm": out_shm, "np": out_np}
 
     while not stop_event.is_set():
@@ -118,9 +104,10 @@ def run_detector(
             connection_id = detection_queue.get(timeout=1)
         except queue.Empty:
             continue
+
         input_frame = frame_manager.get(
-            connection_id,
-            (1, detector_config.model.height, detector_config.model.width, 3),
+            f"face{connection_id}",
+            (1, detector_config.model.face_detection_height, detector_config.model.face_detection_width, 3),
         )
 
         if input_frame is None:
@@ -139,7 +126,7 @@ def run_detector(
     logger.info("Exited detection process...")
 
 
-class ObjectDetectProcess:
+class FaceDetectProcess:
     def __init__(
         self,
         name,
@@ -188,8 +175,7 @@ class ObjectDetectProcess:
         self.detect_process.daemon = True
         self.detect_process.start()
 
-
-class RemoteObjectDetector:
+class RemoteFaceDetector:
     def __init__(self, name, labels, detection_queue, event, model_config, stop_event):
         self.labels = labels
         self.name = name
@@ -197,16 +183,17 @@ class RemoteObjectDetector:
         self.detection_queue = detection_queue
         self.event = event
         self.stop_event = stop_event
-        self.shm = mp.shared_memory.SharedMemory(name=self.name, create=False)
+        self.shm = mp.shared_memory.SharedMemory(name=f"face{self.name}", create=False)
         self.np_shm = np.ndarray(
-            (1, model_config.height, model_config.width, 3),
+            (1, model_config.face_detection_height, model_config.face_detection_width, 3),
             dtype=np.uint8,
             buffer=self.shm.buf,
         )
+        logger.info(f"RemoteFaceDetector.__init__:{self.np_shm.shape}")
         self.out_shm = mp.shared_memory.SharedMemory(
-            name=f"out-{self.name}", create=False
+            name=f"out-face{self.name}", create=False
         )
-        self.out_np_shm = np.ndarray((20, 6), dtype=np.float32, buffer=self.out_shm.buf)
+        self.out_np_shm = np.ndarray((20, 134), dtype=np.float32, buffer=self.out_shm.buf)
 
     def detect(self, tensor_input, threshold=0.4):
         detections = []
@@ -227,9 +214,15 @@ class RemoteObjectDetector:
         for d in self.out_np_shm:
             if d[1] < threshold:
                 break
-            detections.append(
-                (self.labels[int(d[0])], float(d[1]), (d[2], d[3], d[4], d[5]))
-            )
+            entry = []
+            entry.append(self.labels[int(d[0])])
+            entry.append(float(d[1]))
+            entry.append((d[2], d[3], d[4], d[5]))
+            result = []
+            for x in range(128): 
+                result.append(d[x+6])
+            entry.append(result)
+            detections.append(entry)
 
         self.fps.update()
         return detections

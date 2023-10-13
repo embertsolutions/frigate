@@ -7,6 +7,7 @@ from multiprocessing import shared_memory
 from string import printable
 from typing import AnyStr, Optional
 
+import math
 import cv2
 import numpy as np
 
@@ -820,3 +821,25 @@ def add_mask(mask, mask_img):
         [[int(points[i]), int(points[i + 1])] for i in range(0, len(points), 2)]
     )
     cv2.fillPoly(mask_img, pts=[contour], color=(0))
+
+def compare_eu_distance(embeddings1, embeddings2):
+    sum = 0
+    for i in range(128):
+        sum = sum + (embeddings1[i] - embeddings2[i]) * (embeddings1[i] - embeddings2[i])
+    sum = math.sqrt(sum)
+    return sum
+
+def eu_distance(embeddings):
+    sum = 0
+    for i in range(128):
+        sum = sum + embeddings[i] * embeddings[i]
+    sum = math.sqrt(sum)
+    return sum
+
+def cos_similarity(embeddings1, embeddings2):
+    sum = 0
+    for i in range(128):
+        sum = sum + embeddings1[i] * embeddings2[i]
+    tmp1 = eu_distance(embeddings1)
+    tmp2 = eu_distance(embeddings2)
+    return sum / (tmp1 * tmp2)

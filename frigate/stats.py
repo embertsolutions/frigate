@@ -299,8 +299,7 @@ def stats_snapshot(
             # from mypy 0.981 onwards
             "pid": pid,
         }
-    stats["facedetection_fps"] = round(total_detection_fps, 2)
-
+    stats["facedetection_fps"] = round(total_facedetection_fps, 2)
 
     get_processing_stats(config, stats, hwaccel_errors)
 

@@ -55,8 +55,12 @@ class ModelConfig(BaseModel):
     model_type: ModelTypeEnum = Field(
         default=ModelTypeEnum.ssd, title="Object Detection Model Type"
     )
+    face_detection_width: int = Field(default=320, title="Face detection model input width.")
+    face_detection_height: int = Field(default=320, title="Face detection model input height.")
     face_recognition_model: Optional[str] = Field(
-        default="LBPH", title="Face Recognition Model.")
+        default="DOODS_COS", title="Face Recognition Model.")
+    face_recognition_area: Optional[str] = Field(
+        default="Regions", title="Areas to run Face Recognition on.")
     face_recognition_width_crop: Optional[float] = Field(
         default=0.70, title="Face Recognition percentage crop from Detection."
     )

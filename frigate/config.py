@@ -981,6 +981,10 @@ class FrigateConfig(FrigateBaseModel):
         default=DEFAULT_DETECTORS,
         title="Face Detector hardware configuration.",
     )
+    facerecognisers: Dict[str, BaseDetectorConfig] = Field(
+        default=DEFAULT_DETECTORS,
+        title="Face Recogniser hardware configuration.",
+    )
     logger: LoggerConfig = Field(
         default_factory=LoggerConfig, title="Logging configuration."
     )
@@ -1260,6 +1264,45 @@ class FrigateConfig(FrigateBaseModel):
             )
             facedetector_config.model.compute_model_hash()
             config.facedetectors[key] = facedetector_config
+
+        for key, facerecogniser in config.facerecognisers.items():
+            facerecogniser_config: DetectorConfig = parse_obj_as(DetectorConfig, facerecogniser)
+            if facerecogniser_config.model is None:
+                facerecogniser_config.model = config.model
+            else:
+                model = facerecogniser_config.model
+                schema = ModelConfig.schema()["properties"]
+                if (
+                    model.width != schema["width"]["default"]
+                    or model.height != schema["height"]["default"]
+                    or model.facelabelmap_path is not None
+                    or model.facelabelmap is not {}
+                    or model.input_tensor != schema["input_tensor"]["default"]
+                    or model.input_pixel_format
+                    != schema["input_pixel_format"]["default"]
+                ):
+                    logger.warning(
+                        "Customizing more than a detector model path is unsupported."
+                    )
+            merged_model = deep_merge(
+                facerecogniser_config.model.dict(exclude_unset=True),
+                config.model.dict(exclude_unset=True),
+            )
+
+            if "path" not in merged_model:
+                if facerecogniser_config.type == "cpu":
+                    merged_model["path"] = "/face_cpu_model.tflite"
+                elif facerecogniser_config.type == "edgetpu":
+                    merged_model["path"] = "/face_edgetpu_model.tflite"
+                elif facerecogniser_config.type == "armgpu":
+                    merged_model["path"] = "/face_cpu_model.tflite"
+
+            facerecogniser_config.model = ModelConfig.parse_obj(merged_model)
+            facerecogniser_config.model.check_and_load_plus_model(
+                plus_api, facerecogniser_config.type
+            )
+            facerecogniser_config.model.compute_model_hash()
+            config.facerecognisers[key] = facerecogniser_config
 
         return config
 

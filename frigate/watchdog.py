@@ -40,7 +40,7 @@ class FrigateWatchdog(threading.Thread):
                     logger.info("Detection appears to have stopped. Exiting Frigate...")
                     restart_frigate()
 
-            # check the detection processes
+            # check the face detection processes
             for facedetector in self.facedetectors.values():
                 detection_start = facedetector.detection_start.value  # type: ignore[attr-defined]
                 # issue https://github.com/python/typeshed/issues/8799
