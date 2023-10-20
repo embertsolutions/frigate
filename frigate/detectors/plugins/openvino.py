@@ -102,7 +102,7 @@ class OvDetector(DetectionApi):
                     object_detected[5],  # x_max
                 ]
                 i += 1
-            return detections
+            return detections, False
         elif self.ov_model_type == ModelTypeEnum.yolox:
             out_tensor = infer_request.get_output_tensor()
             # [x, y, h, w, box_score, class_no_1, ..., class_no_80],
@@ -130,7 +130,7 @@ class OvDetector(DetectionApi):
                 detections[i] = self.process_yolo(
                     object_detected[6], object_detected[5], object_detected[:4]
                 )
-            return detections
+            return detections, False
         elif self.ov_model_type == ModelTypeEnum.yolov8:
             out_tensor = infer_request.get_output_tensor()
             results = out_tensor.data[0]
@@ -153,7 +153,7 @@ class OvDetector(DetectionApi):
                     object_detected[-1],
                     object_detected[:4],
                 )
-            return detections
+            return detections, False
         elif self.ov_model_type == ModelTypeEnum.yolov5:
             out_tensor = infer_request.get_output_tensor()
             output_data = out_tensor.data[0]
@@ -171,4 +171,4 @@ class OvDetector(DetectionApi):
                     object_detected[4],
                     object_detected[:4],
                 )
-            return detections
+            return detections, False

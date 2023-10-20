@@ -431,35 +431,14 @@ export default function System() {
                           {config.telemetry.network_bandwidth && <Td>-</Td>}
                         </Tr>
                         <Tr key="detect" index="2">
-                          <Td>Detect</Td>
+                          <Td>Detect / Face Detect</Td>
                           <Td>{cameras[camera]['pid'] || '- '}</Td>
 
                           {(() => {
                             if (cameras[camera]['pid'] && cameras[camera]['detection_enabled'] == 1)
                               return (
                                 <Td>
-                                  {cameras[camera]['detection_fps']} ({cameras[camera]['skipped_fps']} skipped)
-                                </Td>
-                              );
-                            else if (cameras[camera]['pid'] && cameras[camera]['detection_enabled'] == 0)
-                              return <Td>disabled</Td>;
-
-                            return <Td>- </Td>;
-                          })()}
-
-                          <Td>{cpu_usages[cameras[camera]['pid']]?.['cpu'] || '- '}%</Td>
-                          <Td>{cpu_usages[cameras[camera]['pid']]?.['mem'] || '- '}%</Td>
-                          {config.telemetry.network_bandwidth && <Td>-</Td>}
-                        </Tr>
-                        <Tr key="facedetect" index="2">
-                          <Td>Face Detect</Td>
-                          <Td>{cameras[camera]['pid'] || '- '}</Td>
-
-                          {(() => {
-                            if (cameras[camera]['pid'] && cameras[camera]['detection_enabled'] == 1)
-                              return (
-                                <Td>
-                                  {cameras[camera]['facedetection_fps']}
+                                  {cameras[camera]['detection_fps']} / {cameras[camera]['facedetection_fps']} ({cameras[camera]['skipped_fps']} skipped) 
                                 </Td>
                               );
                             else if (cameras[camera]['pid'] && cameras[camera]['detection_enabled'] == 0)

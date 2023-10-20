@@ -288,7 +288,7 @@ class TensorRtDetector(DetectionApi):
         raw_detections = self._postprocess_yolo(trt_outputs, self.conf_th)
 
         if len(raw_detections) == 0:
-            return np.zeros((20, 6), np.float32)
+            return np.zeros((20, 6), np.float32), False
 
         # raw_detections: Nx7 numpy arrays of
         #             [[x, y, w, h, box_confidence, class_id, class_prob],
@@ -310,4 +310,4 @@ class TensorRtDetector(DetectionApi):
                 detections, np.zeros((append_cnt, 6), np.float32), axis=0
             )
 
-        return detections
+        return detections, False

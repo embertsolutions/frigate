@@ -56,7 +56,7 @@ class LocalObjectDetector(ObjectDetector):
     def detect(self, tensor_input, threshold=0.4):
         detections = []
 
-        raw_detections = self.detect_raw(tensor_input)
+        raw_detections, timeout = self.detect_raw(tensor_input)
 
         for d in raw_detections:
             if int(d[0]) < 0 or int(d[0]) >= len(self.labels):
@@ -74,11 +74,11 @@ class LocalObjectDetector(ObjectDetector):
         if self.input_transform:
             tensor_input = np.transpose(tensor_input, self.input_transform)
         start = time.monotonic_ns()
-        raw_detections = self.detect_api.detect_raw(tensor_input=tensor_input)
+        raw_detections, timeout = self.detect_api.detect_raw(tensor_input=tensor_input)
         stop = time.monotonic_ns()
         elapsed = round((stop - start) / 1000000, 0)
-        logger.info(f"Detect Time: {elapsed}ms")
-        return raw_detections
+        logger.info(f"Detect Time: {elapsed}ms Timeout: {timeout}")
+        return raw_detections, timeout
 
 
 def run_detector(
@@ -128,7 +128,7 @@ def run_detector(
 
         # detect and send the output
         start.value = datetime.datetime.now().timestamp()
-        detections = object_detector.detect_raw(input_frame)
+        detections, timeout = object_detector.detect_raw(input_frame)
         duration = datetime.datetime.now().timestamp() - start.value
         outputs[connection_id]["np"][:] = detections[:]
         out_events[connection_id].set()

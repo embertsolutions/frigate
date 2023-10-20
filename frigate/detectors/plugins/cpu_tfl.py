@@ -62,4 +62,4 @@ class CpuTfl(DetectionApi):
                 boxes[i][3],
             ]
 
-        return detections
+        return detections, False

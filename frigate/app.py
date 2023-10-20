@@ -381,6 +381,12 @@ class FrigateApp:
                 logger.info(f"go2rtc process pid: {proc.info['pid']}")
                 self.processes["go2rtc"] = proc.info["pid"]
 
+    def init_self(self) -> None:
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            if proc.info["cmdline"][0] == "python3":
+                logger.info(f"python3 process pid: {proc.info['pid']}")
+                self.processes["python3"] = proc.info["pid"]
+
     def init_recording_manager(self) -> None:
         recording_process = mp.Process(
             target=manage_recordings,
@@ -825,6 +831,7 @@ class FrigateApp:
             self.init_onvif()
             self.init_recording_manager()
             self.init_go2rtc()
+            self.init_self()
             self.bind_database()
             self.add_database_defaults()
             self.init_inter_process_communicator()

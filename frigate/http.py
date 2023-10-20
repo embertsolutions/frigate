@@ -1500,48 +1500,58 @@ def faces_import(id):
     if not file:
         return "Image is required", 400
 
-    file.save(FACES_DIR + "/" + file.filename)
+    logger.error(f"filename{file.filename}")
 
-    image = cv2.imread(FACES_DIR + "/" + file.filename, cv2.IMREAD_COLOR)
+    if (".jpg" in file.filename) or (".jpeg" in file.filename) or (".png" in file.filename):
+        logger.error("image")
 
-    os.remove(FACES_DIR + "/" + file.filename)
+        file.save(FACES_DIR + "/" + file.filename)
 
-    height, width, depth = image.shape
+        image = cv2.imread(FACES_DIR + "/" + file.filename, cv2.IMREAD_COLOR)
 
-    logger.error(f"image.shape{image.shape}")
+        os.remove(FACES_DIR + "/" + file.filename)
 
-    frame = cv2.cvtColor(image, cv2.COLOR_BGR2YUV_I420)
+        height, width, depth = image.shape
 
-    logger.error(f"frame.shape{frame.shape}")
+        logger.error(f"image.shape{image.shape}")
 
-    raw_face_detections = import_face_detect(current_app.frigate_config, frame, current_app.facedetection_queue, current_app.faceresult_connection, current_app.stop_event, height, width)
+        frame = cv2.cvtColor(image, cv2.COLOR_BGR2YUV_I420)
 
-    for raw_face_detection in raw_face_detections:
-        face_region = calculate_face_region(
-                raw_face_detection[2][0],
-                raw_face_detection[2][1],
-                raw_face_detection[2][2],
-                raw_face_detection[2][3],
-        )
+        logger.error(f"frame.shape{frame.shape}")
 
-        cropped = yuv_crop_and_resize_face(frame, face_region)
+        raw_face_detections = import_face_detect(current_app.frigate_config, frame, current_app.facedetection_queue, current_app.faceresult_connection, current_app.stop_event, height, width)
 
-        now = datetime.now().timestamp()
-        rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
-        face_id = f"{now}-{rand_id}"
-
-        current_app.face_queue.put(
-            (
-                "face",
-                face_id,
-                int(id),
-                now,
-                raw_face_detection[6],
+        for raw_face_detection in raw_face_detections:
+            face_region = calculate_face_region(
+                    raw_face_detection[2][0],
+                    raw_face_detection[2][1],
+                    raw_face_detection[2][2],
+                    raw_face_detection[2][3],
             )
-        )
 
-        np.save(FACES_DIR + "/" + face_id, cropped);
+            cropped = yuv_crop_and_resize_face(frame, face_region)
 
+            now = datetime.now().timestamp()
+            rand_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+            face_id = f"{now}-{rand_id}"
+
+            current_app.face_queue.put(
+                (
+                    "face",
+                    face_id,
+                    int(id),
+                    now,
+                    raw_face_detection[6],
+                )
+            )
+
+            np.save(FACES_DIR + "/" + face_id, cropped);
+
+    if ".npy" in file.filename:
+        logger.error("numpy")
+
+    if ".mp4" in file.filename:
+        logger.error("video")
 
     return make_response(
         jsonify(
@@ -1553,6 +1563,40 @@ def faces_import(id):
         200,
     )
 
+@bp.route("/faces/<id>/picture.png")
+def face_picture(id):
+    try:
+        face = Face.get(Face.id == id)
+    except DoesNotExist:
+        return "Face not found", 404
+
+    try:
+        image = np.load(FACES_DIR + "/" + id + ".npy")
+    except:
+        return "Event not found", 404
+
+    if image is None:
+        return "Event not found", 404
+
+    try:
+        colour_frame = cv2.cvtColor(
+            image,
+            cv2.COLOR_YUV2BGR_I420,
+        )
+    except KeyError:
+        return "Event not found", 404
+
+    ret, png = cv2.imencode(
+        ".png", colour_frame
+    )
+
+    response = make_response(png.tobytes())
+    response.headers["Content-Type"] = "image/png"
+    response.headers["Cache-Control"] = "private, max-age=31536000"
+    response.headers[
+        "Content-Disposition"
+    ] = f"attachment; filename=face-{id}.png"
+    return response
 
 @bp.route("/faces/forceretrain", methods=["POST"])
 def faces_forceretrain():

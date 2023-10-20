@@ -7,8 +7,10 @@ import useSWR from 'swr';
 import useSWRInfinite from 'swr/infinite';
 import axios from 'axios';
 import { useState, useRef, useCallback, useMemo } from 'preact/hooks';
+import { Snapshot } from '../icons/Snapshot';
 import { Clock } from '../icons/Clock';
 import { Delete } from '../icons/Delete';
+import { Download } from '../icons/Download';
 import Menu, { MenuItem } from '../components/Menu';
 import CalendarIcon from '../icons/Calendar';
 import Calendar from '../components/Calendar';
@@ -48,11 +50,16 @@ export default function Faces({ path, ...props }) {
     label_ids: props.label_ids ?? 'all',
   });
   const [state, setState] = useState({
+    showDownloadMenu: false,
     showDatePicker: false,
     showCalendar: false,
   });
 
   const [viewEvent, setViewEvent] = useState();
+
+  const [downloadState, setDownloadState] = useState({
+    Faceid: null,
+  });
 
   const [deleteState, setDeleteState] = useState({
     deletingFaceId: null,
@@ -157,6 +164,14 @@ export default function Faces({ path, ...props }) {
     }
   };
 
+  const onDownload = async (e, eventId) => {
+    e.stopPropagation();
+    setDownloadState((_prev) => ({
+      Faceid: eventId,
+    }));
+    downloadButton.current = e.target;
+    setState({ ...state, showDownloadMenu: true });
+  };
 
   const GetLabelImportSelection = () => {
     return selectParams.labels;
@@ -316,6 +331,8 @@ export default function Faces({ path, ...props }) {
 
   const datePicker = useRef();
 
+  const downloadButton = useRef();
+
   const handleSelectDateRange = useCallback(
     (dates) => {
       setSearchParams({ ...searchParams, before: dates.before, after: dates.after });
@@ -446,7 +463,7 @@ export default function Faces({ path, ...props }) {
           selection={GetLabelImportSelection()}
           onToggle={(item) => onToggleNamedLabelImportSelect('labels', item, this)}
         />
-        <input type="file" accept="image/*" multiple onChange={onFileChange} />
+        <input type="file" accept=".jpg,.jpeg,.png" multiple onChange={onFileChange} />
         <Button
           className="mx-2"
           onClick={(e) => onImport(e)}
@@ -505,6 +522,19 @@ export default function Faces({ path, ...props }) {
           />
         </div>
       </div>
+      {state.showDownloadMenu && (
+        <Menu onDismiss={() => setState({ ...state, showDownloadMenu: false })} relativeTo={downloadButton}>
+          {(
+            <MenuItem
+              icon={Snapshot}
+              label="Download Face Picture"
+              value="facepicture"
+              href={`${apiHost}/api/faces/${downloadState.Faceid}/picture.png`}
+              download
+            />
+          )}
+        </Menu>
+      )}
       {state.showDatePicker && (
         <Menu
           className="rounded-t-none"
@@ -610,6 +640,11 @@ export default function Faces({ path, ...props }) {
                           className="h-6 w-6 cursor-pointer"
                           stroke="#f87171"
                           onClick={(e) => onDelete(e, face.id, true)}
+                        />
+                        <Download
+                          className="h-6 w-6 mt-auto"
+                          stroke="#3b82f6"
+                          onClick={(e) => onDownload(e, face.id)}
                         />
                       </div>
                     </div>

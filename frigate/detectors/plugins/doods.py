@@ -55,14 +55,21 @@ class Doods(DetectionApi):
                 json = data,
                 timeout=self.api_timeout,
             )
-        except:
-            return detections
+        except requests.exceptions.ReadTimeout:
+            logger.info(f"requests.exceptions.ReadTimeout: {self.api_url}")
+            return detections, True
+        except requests.exceptions.ConnectionError:
+            logger.info(f"requests.exceptions.ConnectionError: {self.api_url}")
+            return detections, True
+        except Exception as ex:
+            logger.info(f"requests.exceptions.Exception: {self.api_url} {type(ex)}")
+            return detections, False
 
         response_json = response.json()
 
         if response_json.get("predictions") is None:
             logger.info(f"Error in parsing response json: {response_json}")
-            return detections
+            return detections, False
 
         for i, detection in enumerate(response_json.get("predictions")):
             if detection["confidence"] < 0.4:
@@ -80,4 +87,4 @@ class Doods(DetectionApi):
             for g, embedding in enumerate(detection.get("embeddings")):
                 detections[i][6+g] = embedding
 
-        return detections
+        return detections, False

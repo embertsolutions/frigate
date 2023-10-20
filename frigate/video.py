@@ -1002,12 +1002,11 @@ def process_frames(
 
             # if starting up, get the next startup scan region
             if startup_scan_counter < 9:
-                ymin = int(frame_shape[0] / 3 * startup_scan_counter / 3)
-                ymax = int(frame_shape[0] / 3 + ymin)
-                xmin = int(frame_shape[1] / 3 * startup_scan_counter / 3)
-                xmax = int(frame_shape[1] / 3 + xmin)
-                regions.append(
-                    calculate_region(
+                ymin = int((frame_shape[0] / 3) * (startup_scan_counter % 3))
+                ymax = int((frame_shape[0] / 3) + ymin)
+                xmin = int((frame_shape[1] / 3) * int(startup_scan_counter / 3))
+                xmax = int((frame_shape[1] / 3) + xmin)
+                region = calculate_region(
                         frame_shape,
                         xmin,
                         ymin,
@@ -1016,8 +1015,10 @@ def process_frames(
                         region_min_size,
                         multiplier=1.2,
                     )
-                )
+                regions.append(region)
+                #logger.info(f"Startup Scan Region {startup_scan_counter}:{frame_shape[1]}:{frame_shape[0]}:{xmin}.{ymin}:{xmax}.{ymax}:{region}")
                 startup_scan_counter += 1
+
 
             # resize regions and detect
             # seed with stationary objects
@@ -1455,4 +1456,5 @@ def process_frames(
                 )
             )
             detection_fps.value = object_detector.fps.eps()
+            facedetection_fps.value = face_detector.fps.eps()
             frame_manager.close(f"{camera_name}{frame_time}")

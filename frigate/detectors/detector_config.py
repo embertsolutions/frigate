@@ -61,6 +61,9 @@ class ModelConfig(BaseModel):
         default="DOODS_COS", title="Face Recognition Model.")
     face_recognition_area: Optional[str] = Field(
         default="Regions", title="Areas to run Face Recognition on.")
+    face_recognition_pause_on_timeout: Optional[float] = Field(
+        default=0.05, title="Face Recognition pause on timeout."
+    )
     face_recognition_width_crop: Optional[float] = Field(
         default=0.70, title="Face Recognition percentage crop from Detection."
     )

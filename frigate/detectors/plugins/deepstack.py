@@ -68,7 +68,7 @@ class DeepStack(DetectionApi):
         detections = np.zeros((20, 6), np.float32)
         if response_json.get("predictions") is None:
             logger.debug(f"Error in parsing response json: {response_json}")
-            return detections
+            return detections, False
 
         for i, detection in enumerate(response_json.get("predictions")):
             logger.debug(f"Response: {detection}")
@@ -103,4 +103,4 @@ class DeepStack(DetectionApi):
                 detection["x_max"] / self.w,
             ]
 
-        return detections
+        return detections, False

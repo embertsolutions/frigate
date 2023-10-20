@@ -2,7 +2,7 @@ import { h } from 'preact';
 import CameraImage from './CameraImage';
 import { useCallback, useState } from 'preact/hooks';
 
-const MIN_LOAD_TIMEOUT_MS = 200;
+const MIN_LOAD_TIMEOUT_MS = 125;
 
 export default function AutoUpdatingCameraImage({ camera, searchParams = '', showFps = true, className }) {
   const [key, setKey] = useState(Date.now());

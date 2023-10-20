@@ -73,5 +73,5 @@ class ArmGpuTfl(DetectionApi):
                 boxes[i][3],
             ]
 
-        return detections
+        return detections, False
     

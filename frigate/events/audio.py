@@ -129,7 +129,7 @@ class AudioTfl:
                 boxes[i][3],
             ]
 
-        return detections
+        return detections, False
 
     def detect(self, tensor_input, threshold=AUDIO_MIN_CONFIDENCE):
         detections = []
@@ -137,7 +137,7 @@ class AudioTfl:
         if self.stop_event.is_set():
             return detections
 
-        raw_detections = self._detect_raw(tensor_input)
+        raw_detections, timeout = self._detect_raw(tensor_input)
 
         for d in raw_detections:
             if d[1] < threshold:
