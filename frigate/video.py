@@ -42,6 +42,9 @@ from frigate.util.image import (
     yuv_region_2_bgr,
     yuv_region_2_rgb,
     yuv_region_2_yuv,
+    yuv_region_2_bgr_face,
+    yuv_region_2_rgb_face,
+    yuv_region_2_yuv_face,
     yuv_crop_and_resize_face,
     calculate_gray_face_region,
     compare_eu_distance,
@@ -147,11 +150,11 @@ def create_tensor_input(frame, model_config: ModelConfig, region):
 
 def create_face_detection_tensor_input(frame, model_config: ModelConfig, region):
     if model_config.input_pixel_format == PixelFormatEnum.rgb:
-        cropped_frame = yuv_region_2_rgb(frame, region)
+        cropped_frame = yuv_region_2_rgb_face(frame, region)
     elif model_config.input_pixel_format == PixelFormatEnum.bgr:
-        cropped_frame = yuv_region_2_bgr(frame, region)
+        cropped_frame = yuv_region_2_bgr_face(frame, region)
     else:
-        cropped_frame = yuv_region_2_yuv(frame, region)
+        cropped_frame = yuv_region_2_yuv_face(frame, region)
 
     # Resize if needed
     if cropped_frame.shape != (model_config.face_detection_height, model_config.face_detection_width, 3):
@@ -1273,8 +1276,8 @@ def process_frames(
                                 )
 
                                 id = -1
-                                max_eu = 0
-                                max_eu_label_id = -1
+                                min_eu = 1000000
+                                min_eu_label_id = -1
                                 max_cos = 0
                                 max_cos_label_id = -1
 
@@ -1287,9 +1290,9 @@ def process_frames(
                                             eu_score = compare_eu_distance(embeddings, attribute_detection[6])
                                             cos_score = cos_similarity(embeddings, attribute_detection[6])
 
-                                            if (eu_score > max_eu):
-                                                max_eu = eu_score
-                                                max_eu_label_id = f.label_id
+                                            if (eu_score < min_eu):
+                                                min_eu = eu_score
+                                                min_eu_label_id = f.label_id
                                             if (cos_score > max_cos):
                                                 max_cos = cos_score
                                                 max_cos_label_id = f.label_id
@@ -1297,18 +1300,18 @@ def process_frames(
                                 elapsed = round((stop - start) / 1000000, 0)
                                 logger.info(f"Face Recognition Time: {elapsed}ms")
 
-                                if ("DOODS_EU" in model_config.face_recognition_model) and (max_eu_label_id >= 0):
-                                    id = max_eu_label_id
-                                    confidence = max_eu
+                                if ("DOODS_EU" in model_config.face_recognition_model) and (min_eu_label_id >= 0):
+                                    id = min_eu_label_id
+                                    confidence = (2 - min_eu) / 2
 
-                                    if max_eu_label_id > 0 and confidence >= model_config.face_recognition_min_score:
-                                        logger.info(f"FaceNet eu Face Recognized:{max_eu_label_id} confidence:{confidence} camera:{camera_name} Accepted")
+                                    if min_eu_label_id > 0 and confidence >= model_config.face_recognition_min_score:
+                                        logger.info(f"FaceNet eu Face Recognized:{min_eu_label_id} confidence:{confidence} camera:{camera_name} Accepted")
                                         if attribute_area > max_face_area:
                                             max_face_area = attribute_area
                                             max_face_label_id = id
                                             max_face_confidence = confidence
                                     else:
-                                        logger.info(f"FaceNet eu Face Recognized:{max_eu_label_id} confidence:{confidence} camera:{camera_name} Rejected")
+                                        logger.info(f"FaceNet eu Face Recognized:{min_eu_label_id} confidence:{confidence} camera:{camera_name} Rejected")
 
                                 if ("DOODS_COS" in model_config.face_recognition_model) and (max_cos_label_id >= 0):
                                     id = max_cos_label_id
