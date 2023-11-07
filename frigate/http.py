@@ -479,13 +479,13 @@ def faces_set_label(id):
     json: dict[str, any] = request.get_json(silent=True) or {}
     labelid = json.get("labelid")
 
-    if labelid and labelid > 20:
+    if labelid and labelid > 50:
         return make_response(
             jsonify(
                 {
                     "success": False,
                     "message": labelid
-                    + " exceeds the 20 limit for labelid",
+                    + " exceeds the 50 limit for labelid",
                 }
             ),
             400,
@@ -640,7 +640,7 @@ def add_facelabel():
 
     id = 0
 
-    for x in range(1, 20):
+    for x in range(1, 50):
         found = False
         for f in facelabels:
             if f.id == x:
@@ -1511,15 +1511,17 @@ def faces_import(id):
 
         os.remove(FACES_DIR + "/" + file.filename)
 
-        height, width, depth = image.shape
-
-        logger.error(f"image.shape{image.shape}")
-
         frame = cv2.cvtColor(image, cv2.COLOR_BGR2YUV_I420)
+
+        height, width = frame.shape
+        height = height / 3 * 2
 
         logger.error(f"frame.shape{frame.shape}")
 
         raw_face_detections = import_face_detect(current_app.frigate_config, frame, current_app.facedetection_queue, current_app.faceresult_connection, current_app.stop_event, height, width)
+
+        if len(raw_face_detections) > 1:
+            return "Too main faces in picture", 400
 
         for raw_face_detection in raw_face_detections:
             face_region = calculate_face_region(
@@ -1545,7 +1547,7 @@ def faces_import(id):
                 )
             )
 
-            np.save(FACES_DIR + "/" + face_id, cropped);
+        np.save(FACES_DIR + "/" + face_id, frame);
 
     if ".npy" in file.filename:
         logger.error("numpy")
@@ -1557,7 +1559,7 @@ def faces_import(id):
         jsonify(
             {
                 "success": True,
-                "message": "Successfully forced retrain.",
+                "message": "Successfully imported.",
             }
         ),
         200,
@@ -1618,6 +1620,9 @@ def faces_forceretrain():
                 frame = np.load(FACES_DIR + "/" + f.id + ".npy")
 
                 height, width = frame.shape
+                height = height / 3 * 2
+
+                logger.error(f"frame.shape{frame.shape}")
 
                 raw_face_detections = import_face_detect(current_app.frigate_config, frame, current_app.facedetection_queue, current_app.faceresult_connection, current_app.stop_event, height, width)
 
